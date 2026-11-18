@@ -1,5 +1,6 @@
 (() => {
   const TOKEN_KEY = 'qwen_quiz_admin_token';
+  const { t, pickLocalized, initLangSwitcher } = window.QuizI18n;
 
   let adminToken = localStorage.getItem(TOKEN_KEY) || '';
   let socket = null;
@@ -7,14 +8,9 @@
   let settingsInitialized = false;
   let activeTab = 'control';
 
-  const PHASE_LABELS = {
-    LOBBY: 'Лобби (ожидание)',
-    ROUND_ACTIVE: 'Идёт раунд',
-    ROUND_LOCKED: 'Приём ответов закрыт',
-    JUDGING: 'Судейство ИИ Qwen...',
-    ROUND_RESULTS: 'Показаны итоги раунда',
-    FINISHED: 'Квиз завершён'
-  };
+  function getPhaseLabel(status) {
+    return t(`phase_${status}`);
+  }
 
   const els = {
     loginScreen: document.getElementById('admin-login-screen'),
@@ -170,7 +166,10 @@
 
     els.startRoundBtn.disabled = false;
     els.roundSelect.innerHTML = state.questions
-      .map((q, idx) => `<option value="${idx}">Раунд ${idx + 1}: ${escapeHtml(q.title)} (${q.timeLimit} сек)</option>`)
+      .map((q, idx) => {
+        const locTitle = pickLocalized(q.title, q.titleKk);
+        return `<option value="${idx}">${escapeHtml(t('round_prefix'))} ${idx + 1}: ${escapeHtml(locTitle)} (${q.timeLimit} сек)</option>`;
+      })
       .join('');
 
     if (prevValue !== '' && Number(prevValue) < state.questions.length) {
@@ -282,9 +281,12 @@
   function renderTeamsPanel(state) {
     const round = state.currentRound;
     if (round) {
-      els.submittedPill.textContent = `${round.submittedCount} / ${round.totalTeams} ответили`;
+      els.submittedPill.textContent = t('answered_stats', {
+        submitted: round.submittedCount,
+        total: round.totalTeams
+      });
     } else {
-      els.submittedPill.textContent = `${state.teams.length} команд`;
+      els.submittedPill.textContent = t('teams_count', { n: state.teams.length });
     }
 
     if (!state.teams.length) {
@@ -428,11 +430,15 @@
 
     els.questionsList.innerHTML = state.questions
       .map(
-        (q, idx) => `
+        (q, idx) => {
+          const locTitle = pickLocalized(q.title, q.titleKk);
+          const locQuestion = pickLocalized(q.question, q.questionKk);
+          const locRef = pickLocalized(q.referenceAnswer, q.referenceAnswerKk);
+          return `
           <div class="eval-card">
             <div class="eval-head">
               <div>
-                <strong>Раунд ${idx + 1}: ${escapeHtml(q.title)}</strong>
+                <strong>${escapeHtml(t('round_prefix'))} ${idx + 1}: ${escapeHtml(locTitle)}</strong>
                 <span class="pill" style="margin-left:6px;">⏱ ${q.timeLimit} сек</span>
               </div>
               <div class="btn-row">
@@ -442,9 +448,9 @@
                 <button type="button" class="btn btn-danger btn-sm" data-del-q="${escapeHtml(q.id)}">🗑</button>
               </div>
             </div>
-            <div style="margin-bottom:6px;">${escapeHtml(q.question)}</div>
+            <div style="margin-bottom:6px;">${escapeHtml(locQuestion)}</div>
             <div class="muted" style="font-size:0.86rem;">
-              <strong style="color:#6ee7b7;">Эталон:</strong> ${escapeHtml(q.referenceAnswer)}
+              <strong style="color:#6ee7b7;">Эталон:</strong> ${escapeHtml(locRef)}
             </div>
             ${
               q.criteria
@@ -452,7 +458,8 @@
                 : ''
             }
           </div>
-        `
+        `;
+        }
       )
       .join('');
 
@@ -527,11 +534,16 @@
 
   function renderAdminState(state) {
     adminState = state;
-    els.quizTitle.textContent = state.settings.quizTitle || 'Панель ведущего';
-    els.statusLine.textContent = `Статус: ${PHASE_LABELS[state.status] || state.status}`;
-    els.playersPill.textContent = `👥 ${state.onlinePlayersCount} онлайн (всего ${state.totalPlayersCount})`;
-    els.teamsPill.textContent = `🏁 ${state.teams.length} команд`;
-    els.phasePill.textContent = PHASE_LABELS[state.status] || state.status;
+    document.title = t('page_title_admin');
+    els.quizTitle.textContent =
+      pickLocalized(state.settings.quizTitle, state.settings.quizTitleKk) || t('admin_header_title');
+    els.statusLine.textContent = `${t('status_prefix')} ${getPhaseLabel(state.status)}`;
+    els.playersPill.textContent = t('online_stats', {
+      online: state.onlinePlayersCount,
+      total: state.totalPlayersCount
+    });
+    els.teamsPill.textContent = `🏁 ${t('teams_count', { n: state.teams.length })}`;
+    els.phasePill.textContent = getPhaseLabel(state.status);
 
     renderRoundSelect(state);
 
@@ -540,10 +552,15 @@
       els.roundPanel.classList.add('hidden');
       els.evalPanel.classList.add('hidden');
     } else {
+      const fullQ = state.questions.find((q) => q.id === round.questionId);
+      const locTitle = pickLocalized(round.title, fullQ?.titleKk);
+      const locQuestion = pickLocalized(round.question, fullQ?.questionKk);
+      const locRef = pickLocalized(round.referenceAnswer, fullQ?.referenceAnswerKk);
+
       els.roundPanel.classList.remove('hidden');
-      els.roundTitle.textContent = `Раунд ${round.roundNumber}: ${round.title}`;
-      els.questionText.textContent = round.question;
-      els.referenceAnswer.textContent = round.referenceAnswer;
+      els.roundTitle.textContent = `${t('round_prefix')} ${round.roundNumber}: ${locTitle}`;
+      els.questionText.textContent = locQuestion;
+      els.referenceAnswer.textContent = locRef;
       renderAdminTimer(round.remainingSeconds, round.durationSeconds, round.isPaused);
 
       const isActive = state.status === 'ROUND_ACTIVE';
@@ -551,7 +568,7 @@
       const isJudging = state.status === 'JUDGING';
 
       els.activeControls.classList.toggle('hidden', !isActive);
-      els.pauseRoundBtn.textContent = round.isPaused ? '▶ Продолжить' : '⏸ Пауза';
+      els.pauseRoundBtn.textContent = round.isPaused ? t('resume_btn') : t('pause_btn');
       els.lockedControls.classList.toggle('hidden', !isLocked);
       els.judgingSpinner.classList.toggle('hidden', !isJudging);
       if (isActive || isJudging) {
@@ -880,6 +897,13 @@
     } catch (err) {
       els.testQwenResult.className = 'alert alert-danger';
       els.testQwenResult.textContent = `❌ Ошибка подключения: ${err.message}`;
+    }
+  });
+
+  initLangSwitcher(() => {
+    document.title = t('page_title_admin');
+    if (adminState) {
+      renderAdminState(adminState);
     }
   });
 

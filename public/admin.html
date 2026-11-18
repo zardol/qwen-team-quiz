@@ -10,11 +10,17 @@
   <div class="container-admin">
     <!-- Экран входа администратора -->
     <section id="admin-login-screen" class="card" style="max-width: 440px; margin: 60px auto;">
-      <div class="brand" style="margin-bottom: 16px;">
-        <div class="brand-logo">⚖️</div>
-        <div>
-          <h1>Панель администратора</h1>
-          <div class="brand-sub">Управление квизом и ИИ-судьей Qwen</div>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom: 16px;">
+        <div class="brand">
+          <div class="brand-logo">⚖️</div>
+          <div>
+            <h1 data-i18n="admin_title">Панель администратора</h1>
+            <div class="brand-sub" data-i18n="admin_subtitle">Управление квизом и ИИ-судьей Qwen</div>
+          </div>
+        </div>
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-btn active" data-set-lang="ru">РУС</button>
+          <button type="button" class="lang-btn" data-set-lang="kk">ҚАЗ</button>
         </div>
       </div>
 
@@ -22,14 +28,14 @@
 
       <form id="admin-login-form">
         <div class="form-group">
-          <label for="admin-login-input">Логин администратора</label>
+          <label for="admin-login-input" data-i18n="admin_login_label">Логин администратора</label>
           <input type="text" id="admin-login-input" value="admin" required autocomplete="username" />
         </div>
         <div class="form-group">
-          <label for="admin-password-input">Пароль</label>
+          <label for="admin-password-input" data-i18n="admin_password_label">Пароль</label>
           <input type="password" id="admin-password-input" required autocomplete="current-password" />
         </div>
-        <button type="submit" class="btn btn-block">Войти в панель управления</button>
+        <button type="submit" class="btn btn-block" data-i18n="admin_login_btn">Войти в панель управления</button>
       </form>
     </section>
 
@@ -39,24 +45,28 @@
         <div class="brand">
           <div class="brand-logo">⚖️</div>
           <div>
-            <h1 id="admin-quiz-title">Панель ведущего квиза</h1>
+            <h1 id="admin-quiz-title" data-i18n="admin_header_title">Панель ведущего квиза</h1>
             <div class="brand-sub" id="admin-status-line">Загрузка...</div>
           </div>
         </div>
         <div class="topbar-meta">
           <span class="pill" id="admin-players-pill">👥 0 онлайн</span>
           <span class="pill" id="admin-teams-pill">🏁 0 команд</span>
-          <button type="button" class="btn btn-secondary btn-sm" id="copy-student-link-btn">
+          <button type="button" class="btn btn-secondary btn-sm" id="copy-student-link-btn" data-i18n="copy_student_link">
             🔗 Ссылка для студентов
           </button>
-          <button type="button" class="btn btn-secondary btn-sm" id="admin-logout-btn">Выйти</button>
+          <div class="lang-switch" role="group" aria-label="Language">
+            <button type="button" class="lang-btn active" data-set-lang="ru">РУС</button>
+            <button type="button" class="lang-btn" data-set-lang="kk">ҚАЗ</button>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="admin-logout-btn" data-i18n="logout_btn">Выйти</button>
         </div>
       </header>
 
       <nav class="tabs">
-        <button type="button" class="tab-btn active" data-tab="control">🎮 Управление игрой</button>
-        <button type="button" class="tab-btn" data-tab="questions">📝 База вопросов (<span id="questions-count-tab">0</span>)</button>
-        <button type="button" class="tab-btn" data-tab="settings">🤖 Настройки ИИ Qwen</button>
+        <button type="button" class="tab-btn active" data-tab="control" data-i18n="tab_control">🎮 Управление игрой</button>
+        <button type="button" class="tab-btn" data-tab="questions"><span data-i18n="tab_questions">📝 База вопросов</span> (<span id="questions-count-tab">0</span>)</button>
+        <button type="button" class="tab-btn" data-tab="settings" data-i18n="tab_settings">🤖 Настройки ИИ Qwen</button>
       </nav>
 
       <!-- ВКЛАДКА 1: Управление игрой -->
@@ -66,15 +76,15 @@
           <div>
             <div class="card card-highlight">
               <div class="card-title">
-                <span>Пульт раунда</span>
+                <span data-i18n="round_panel_title">Пульт раунда</span>
                 <span class="pill pill-primary" id="admin-phase-pill">Лобби</span>
               </div>
 
               <div class="form-group">
-                <label for="round-select">Выберите вопрос для раунда</label>
+                <label for="round-select" data-i18n="select_question_label">Выберите вопрос для раунда</label>
                 <div class="btn-row">
                   <select id="round-select" style="flex: 1;"></select>
-                  <button type="button" class="btn" id="start-round-btn">▶ Запустить раунд</button>
+                  <button type="button" class="btn" id="start-round-btn" data-i18n="start_round_btn">▶ Запустить раунд</button>
                 </div>
               </div>
 
@@ -92,24 +102,24 @@
 
                 <div class="question-box" id="admin-question-text" style="font-size: 1rem;"></div>
                 <div class="reference-box" style="margin-bottom: 12px;">
-                  <div style="font-size: 0.78rem; font-weight: 700; color: #6ee7b7;">ЭТАЛОННЫЙ ОТВЕТ (видит только ведущий)</div>
+                  <div style="font-size: 0.78rem; font-weight: 700; color: #6ee7b7;" data-i18n="ref_answer_admin_label">ЭТАЛОННЫЙ ОТВЕТ (видит только ведущий)</div>
                   <div id="admin-reference-answer"></div>
                 </div>
 
                 <div class="btn-row" id="admin-active-controls">
-                  <button type="button" class="btn btn-secondary btn-sm" id="pause-round-btn">⏸ Пауза</button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="add-time-btn">⏱ +30 сек</button>
-                  <button type="button" class="btn btn-warning btn-sm" id="lock-round-btn">⏹ Завершить приём ответов</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="pause-round-btn" data-i18n="pause_btn">⏸ Пауза</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="add-time-btn" data-i18n="add_time_btn">⏱ +30 сек</button>
+                  <button type="button" class="btn btn-warning btn-sm" id="lock-round-btn" data-i18n="lock_round_btn">⏹ Завершить приём ответов</button>
                 </div>
 
                 <div class="btn-row hidden" id="admin-locked-controls" style="margin-top: 8px;">
-                  <button type="button" class="btn btn-success" id="judge-qwen-btn">
+                  <button type="button" class="btn btn-success" id="judge-qwen-btn" data-i18n="judge_qwen_btn">
                     ⚖️ Судить раунд с помощью ИИ Qwen
                   </button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="manual-judge-btn">
+                  <button type="button" class="btn btn-secondary btn-sm" id="manual-judge-btn" data-i18n="manual_judge_btn">
                     ✍️ Оценить вручную
                   </button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="reopen-round-btn">
+                  <button type="button" class="btn btn-secondary btn-sm" id="reopen-round-btn" data-i18n="reopen_round_btn">
                     🔓 Открыть ещё на 30 сек
                   </button>
                 </div>
@@ -128,7 +138,7 @@
               <div id="admin-evaluation-panel" class="hidden" style="margin-top: 16px;">
                 <div class="card-title">
                   <span id="admin-eval-heading">Оценки раунда</span>
-                  <button type="button" class="btn btn-success" id="publish-results-btn">
+                  <button type="button" class="btn btn-success" id="publish-results-btn" data-i18n="publish_results_btn">
                     📢 Опубликовать результаты студентам
                   </button>
                 </div>
@@ -139,14 +149,14 @@
               <!-- Переход дальше / Финал / Сброс -->
               <div class="btn-row" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
                 <button type="button" class="btn hidden" id="next-round-btn">⏭ Запустить следующий раунд</button>
-                <button type="button" class="btn btn-warning btn-sm" id="finish-quiz-btn">🏆 Завершить квиз (Финал)</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="reset-scores-btn">🔄 Сбросить очки</button>
-                <button type="button" class="btn btn-danger btn-sm" id="reset-all-btn">🗑 Полный сброс</button>
+                <button type="button" class="btn btn-warning btn-sm" id="finish-quiz-btn" data-i18n="finish_quiz_btn">🏆 Завершить квиз (Финал)</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="reset-scores-btn" data-i18n="reset_scores_btn">🔄 Сбросить очки</button>
+                <button type="button" class="btn btn-danger btn-sm" id="reset-all-btn" data-i18n="reset_all_btn">🗑 Полный сброс</button>
               </div>
             </div>
 
             <div class="card">
-              <h3 class="card-title">🏆 Текущий рейтинг команд</h3>
+              <h3 class="card-title" data-i18n="current_rating_title">🏆 Текущий рейтинг команд</h3>
               <div id="admin-leaderboard"></div>
             </div>
           </div>
@@ -155,14 +165,14 @@
           <div>
             <div class="card">
               <div class="card-title">
-                <span>Команды и ответы</span>
+                <span data-i18n="teams_and_answers_title">Команды и ответы</span>
                 <span class="pill pill-success" id="admin-submitted-pill">0 / 0 ответили</span>
               </div>
               <div id="admin-teams-list"></div>
             </div>
 
             <div class="card" id="admin-unassigned-card">
-              <h3 class="card-title">Участники без команды</h3>
+              <h3 class="card-title" data-i18n="unassigned_title">Участники без команды</h3>
               <div id="admin-unassigned-list"></div>
             </div>
           </div>
@@ -281,6 +291,7 @@
   <div class="toast-stack" id="toast-stack"></div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/admin.js"></script>
 </body>
 </html>

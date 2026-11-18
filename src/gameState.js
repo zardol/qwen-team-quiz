@@ -25,14 +25,23 @@ function maskApiKey(key) {
   return `${key.slice(0, 5)}••••${key.slice(-4)}`;
 }
 
+function tokensMatch(a, b) {
+  if (!a || !b || typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 class QuizGameManager {
   constructor() {
     this.status = GAME_STATUS.LOBBY;
-    this.players = new Map(); // playerId -> { id, name, teamId, isOnline, socketIds: Set, joinedAt }
+    this.players = new Map(); // playerId -> { id, token, name, teamId, isOnline, socketIds: Set, joinedAt }
     this.teams = new Map();   // teamId -> { id, name, emoji, captainId, roundScores: {}, totalScore, createdAt }
     this.questions = [];
     this.settings = {
-      quizTitle: 'Интеллектуальный командный квиз',
+      quizTitle: 'Интерактивный квиз по философии',
+      quizTitleKk: 'Философия бойынша интерактивті квиз',
       qwenBaseUrl: process.env.QWEN_BASE_URL || DEFAULT_QWEN_BASE_URL,
       qwenModel: process.env.QWEN_MODEL || DEFAULT_QWEN_MODEL,
       defaultTimeLimit: 90
@@ -65,6 +74,7 @@ class QuizGameManager {
         if (parsed.settings) {
           this.settings = {
             quizTitle: parsed.settings.quizTitle || this.settings.quizTitle,
+            quizTitleKk: parsed.settings.quizTitleKk || this.settings.quizTitleKk,
             qwenBaseUrl: process.env.QWEN_BASE_URL || parsed.settings.qwenBaseUrl || DEFAULT_QWEN_BASE_URL,
             qwenModel: process.env.QWEN_MODEL || parsed.settings.qwenModel || DEFAULT_QWEN_MODEL,
             defaultTimeLimit: Number(parsed.settings.defaultTimeLimit) || 90
@@ -99,8 +109,11 @@ class QuizGameManager {
     return {
       id: q.id ? String(q.id) : generateId('q'),
       title: String(q.title || `Вопрос ${index + 1}`).trim(),
+      titleKk: String(q.titleKk || '').trim(),
       question: String(q.question || '').trim(),
+      questionKk: String(q.questionKk || '').trim(),
       referenceAnswer: String(q.referenceAnswer || '').trim(),
+      referenceAnswerKk: String(q.referenceAnswerKk || '').trim(),
       criteria: String(q.criteria || '').trim(),
       timeLimit: Math.max(15, Math.min(600, Number(q.timeLimit) || this.settings.defaultTimeLimit || 90))
     };
@@ -138,8 +151,11 @@ class QuizGameManager {
     const activeRecord = this.roundRecords.get(idx);
     if (activeRecord && !activeRecord.publishedResults) {
       activeRecord.title = updated.title;
+      activeRecord.titleKk = updated.titleKk;
       activeRecord.question = updated.question;
+      activeRecord.questionKk = updated.questionKk;
       activeRecord.referenceAnswer = updated.referenceAnswer;
+      activeRecord.referenceAnswerKk = updated.referenceAnswerKk;
       activeRecord.criteria = updated.criteria;
       activeRecord.timeLimit = updated.timeLimit;
     }
@@ -175,6 +191,7 @@ class QuizGameManager {
   getAdminSettings() {
     return {
       quizTitle: this.settings.quizTitle,
+      quizTitleKk: this.settings.quizTitleKk,
       qwenBaseUrl: this.settings.qwenBaseUrl,
       qwenModel: this.settings.qwenModel,
       defaultTimeLimit: this.settings.defaultTimeLimit,
@@ -194,6 +211,9 @@ class QuizGameManager {
   updateAdminSettings(payload) {
     if (typeof payload.quizTitle === 'string' && payload.quizTitle.trim()) {
       this.settings.quizTitle = payload.quizTitle.trim();
+    }
+    if (typeof payload.quizTitleKk === 'string' && payload.quizTitleKk.trim()) {
+      this.settings.quizTitleKk = payload.quizTitleKk.trim();
     }
     if (typeof payload.qwenBaseUrl === 'string' && payload.qwenBaseUrl.trim()) {
       this.settings.qwenBaseUrl = payload.qwenBaseUrl.trim();
@@ -219,11 +239,11 @@ class QuizGameManager {
   // Players & Teams
   // ========================
 
-  registerOrReconnectPlayer({ playerId, name, socketId }) {
+  registerOrReconnectPlayer({ playerId, playerToken, name, socketId }) {
     const cleanName = String(name || '').trim().slice(0, 32);
-    let existing = playerId ? this.players.get(playerId) : null;
+    const existing = playerId ? this.players.get(playerId) : null;
 
-    if (existing) {
+    if (existing && tokensMatch(playerToken, existing.token)) {
       if (cleanName) existing.name = cleanName;
       existing.isOnline = true;
       existing.socketIds.add(socketId);
@@ -238,9 +258,10 @@ class QuizGameManager {
       throw new Error('Введите ваше имя.');
     }
 
-    const newId = playerId && /^[a-zA-Z0-9_-]{4,40}$/.test(playerId) ? playerId : generateId('p');
+    const newId = generateId('p');
     const player = {
       id: newId,
+      token: crypto.randomBytes(16).toString('hex'),
       name: cleanName,
       teamId: null,
       isOnline: true,
@@ -458,8 +479,11 @@ class QuizGameManager {
       roundIndex: idx,
       questionId: q.id,
       title: q.title,
+      titleKk: q.titleKk || '',
       question: q.question,
+      questionKk: q.questionKk || '',
       referenceAnswer: q.referenceAnswer,
+      referenceAnswerKk: q.referenceAnswerKk || '',
       criteria: q.criteria,
       timeLimit: duration,
       durationSeconds: duration,
@@ -829,7 +853,6 @@ class QuizGameManager {
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((team) => {
         const members = this.getTeamMembers(team.id).map((m) => ({
-          id: m.id,
           name: m.name,
           isOnline: m.isOnline,
           isCaptain: m.id === team.captainId
@@ -839,7 +862,6 @@ class QuizGameManager {
           id: team.id,
           name: team.name,
           emoji: team.emoji,
-          captainId: team.captainId,
           totalScore: team.totalScore,
           memberCount: members.length,
           members,
@@ -861,19 +883,21 @@ class QuizGameManager {
         roundNumber: round.roundNumber,
         totalQuestions: this.questions.length,
         title: round.title,
+        titleKk: round.titleKk || '',
         question: round.question,
+        questionKk: round.questionKk || '',
         timeLimit: round.timeLimit,
         durationSeconds: round.durationSeconds,
         remainingSeconds: this.getRemainingSeconds(round),
         isPaused: round.isPaused,
-        referenceAnswer: showAnswer ? round.referenceAnswer : null
+        referenceAnswer: showAnswer ? round.referenceAnswer : null,
+        referenceAnswerKk: showAnswer ? (round.referenceAnswerKk || '') : null
       };
     }
 
     let myTeamData = null;
     if (myTeam) {
       const members = this.getTeamMembers(myTeam.id).map((m) => ({
-        id: m.id,
         name: m.name,
         isOnline: m.isOnline,
         isCaptain: m.id === myTeam.captainId
@@ -884,12 +908,16 @@ class QuizGameManager {
         id: myTeam.id,
         name: myTeam.name,
         emoji: myTeam.emoji,
-        captainId: myTeam.captainId,
         isCaptain: myTeam.captainId === player.id,
         totalScore: myTeam.totalScore,
         members,
         submission,
-        ideas
+        ideas: ideas.map((i) => ({
+          id: i.id,
+          playerName: i.playerName,
+          text: i.text,
+          timestamp: i.timestamp
+        }))
       };
     }
 
@@ -901,6 +929,7 @@ class QuizGameManager {
       roundResults = {
         ...round.publishedResults,
         referenceAnswer: round.referenceAnswer,
+        referenceAnswerKk: round.referenceAnswerKk || '',
         evaluations: [...round.publishedResults.evaluations]
           .map((ev) => ({
             ...ev,
@@ -918,8 +947,11 @@ class QuizGameManager {
           roundHistory.push({
             roundNumber: rec.roundNumber,
             title: rec.title,
+            titleKk: rec.titleKk || '',
             question: rec.question,
+            questionKk: rec.questionKk || '',
             referenceAnswer: rec.referenceAnswer,
+            referenceAnswerKk: rec.referenceAnswerKk || '',
             roundSummary: rec.publishedResults.roundSummary,
             bestTeamIds: rec.publishedResults.bestTeamIds
           });
@@ -931,6 +963,7 @@ class QuizGameManager {
     return {
       status: this.status,
       quizTitle: this.settings.quizTitle,
+      quizTitleKk: this.settings.quizTitleKk || '',
       totalQuestions: this.questions.length,
       player: player
         ? {

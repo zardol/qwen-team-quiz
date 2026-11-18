@@ -15,11 +15,62 @@ const {
 
 const PORT = Number(process.env.PORT) || 3000;
 const ADMIN_LOGIN = (process.env.ADMIN_LOGIN || 'admin').trim();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const GENERATED_ADMIN_PASSWORD = !process.env.ADMIN_PASSWORD
+  ? crypto.randomBytes(12).toString('base64url')
+  : null;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || GENERATED_ADMIN_PASSWORD;
 const SESSION_SECRET =
   process.env.ADMIN_SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const MAX_LOGIN_ATTEMPTS = 5;
+const loginAttempts = new Map();
+
+const TRUSTED_QWEN_HOSTS = [
+  'dashscope-intl.aliyuncs.com',
+  'dashscope.aliyuncs.com',
+  'openrouter.ai'
+];
+
+function isTrustedQwenHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (TRUSTED_QWEN_HOSTS.includes(host)) return true;
+  if (host.endsWith('.maas.qwencloudapi.com') || host.endsWith('.maas.aliyuncs.com')) {
+    return true;
+  }
+  return false;
+}
+
+function isBlockedPrivateIp(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === '0.0.0.0' || h === '::1') return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^169\.254\./.test(h) || /^192\.168\./.test(h)) {
+    return true;
+  }
+  const match172 = h.match(/^172\.(\d+)\./);
+  if (match172 && Number(match172[1]) >= 16 && Number(match172[1]) <= 31) {
+    return true;
+  }
+  return false;
+}
+
+function validateQwenBaseUrl(rawUrl, { allowLocalhost = false } = {}) {
+  let parsed;
+  try {
+    parsed = new URL(String(rawUrl || '').trim());
+  } catch {
+    throw new Error('Некорректный формат Base URL.');
+  }
+  const isLocal = parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
+  if (parsed.protocol !== 'https:' && !(allowLocalhost && isLocal && parsed.protocol === 'http:')) {
+    throw new Error('Base URL должен использовать протокол HTTPS.');
+  }
+  if (!isLocal && isBlockedPrivateIp(parsed.hostname)) {
+    throw new Error('Указан недопустимый внутренний IP-адрес для Base URL.');
+  }
+  return parsed;
+}
 
 function signAdminToken(login) {
   const payload = {
@@ -70,13 +121,18 @@ function safeEqualText(a, b) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   pingTimeout: 25000,
-  pingInterval: 10000,
-  cors: {
-    origin: '*'
-  }
+  pingInterval: 10000
+});
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
 });
 
 app.use(express.json({ limit: '1mb' }));
@@ -155,14 +211,28 @@ app.get('/api/health', (req, res) => {
 // ========================
 
 app.post('/api/admin/login', (req, res) => {
+  const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  const record = loginAttempts.get(clientIp);
+  if (record && record.resetAt > now && record.count >= MAX_LOGIN_ATTEMPTS) {
+    const waitMinutes = Math.ceil((record.resetAt - now) / 60000);
+    return res.status(429).json({
+      error: `Слишком много неудачных попыток входа. Повторите через ${waitMinutes} мин.`
+    });
+  }
+
   const { login, password } = req.body || {};
   const loginOk = safeEqualText(String(login || '').trim(), ADMIN_LOGIN);
   const passOk = safeEqualText(String(password || ''), ADMIN_PASSWORD);
 
   if (!loginOk || !passOk) {
+    const nextCount = record && record.resetAt > now ? record.count + 1 : 1;
+    const resetAt = record && record.resetAt > now ? record.resetAt : now + LOGIN_WINDOW_MS;
+    loginAttempts.set(clientIp, { count: nextCount, resetAt });
     return res.status(401).json({ error: 'Неверный логин или пароль администратора.' });
   }
 
+  loginAttempts.delete(clientIp);
   const token = signAdminToken(ADMIN_LOGIN);
   return res.json({
     ok: true,
@@ -225,7 +295,23 @@ app.get('/api/admin/settings', requireAdminHttp, (req, res) => {
 
 app.post('/api/admin/settings', requireAdminHttp, (req, res) => {
   try {
-    const settings = game.updateAdminSettings(req.body || {});
+    const body = req.body || {};
+    const saved = game.getQwenRuntimeConfig();
+    if (typeof body.qwenBaseUrl === 'string' && body.qwenBaseUrl.trim()) {
+      const parsedNew = validateQwenBaseUrl(body.qwenBaseUrl, { allowLocalhost: false });
+      const parsedSaved = new URL(saved.baseUrl);
+      const hasNewKey = Boolean(body.qwenApiKey && body.qwenApiKey.trim());
+      if (
+        parsedNew.hostname !== parsedSaved.hostname &&
+        !isTrustedQwenHost(parsedNew.hostname) &&
+        !hasNewKey
+      ) {
+        return res.status(400).json({
+          error: 'При смене домена API на сторонний укажите также новый API-ключ.'
+        });
+      }
+    }
+    const settings = game.updateAdminSettings(body);
     res.json({ ok: true, settings });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -233,16 +319,38 @@ app.post('/api/admin/settings', requireAdminHttp, (req, res) => {
 });
 
 app.post('/api/admin/test-qwen', requireAdminHttp, async (req, res) => {
-  const saved = game.getQwenRuntimeConfig();
-  const body = req.body || {};
-  const config = {
-    apiKey: body.qwenApiKey && body.qwenApiKey.trim() ? body.qwenApiKey.trim() : saved.apiKey,
-    baseUrl: body.qwenBaseUrl && body.qwenBaseUrl.trim() ? body.qwenBaseUrl.trim() : saved.baseUrl,
-    model: body.qwenModel && body.qwenModel.trim() ? body.qwenModel.trim() : saved.model
-  };
+  try {
+    const saved = game.getQwenRuntimeConfig();
+    const body = req.body || {};
+    const baseUrl =
+      body.qwenBaseUrl && body.qwenBaseUrl.trim() ? body.qwenBaseUrl.trim() : saved.baseUrl;
+    const allowLocal = process.env.ALLOW_LOCAL_QWEN_TEST === '1';
+    const parsedTarget = validateQwenBaseUrl(baseUrl, { allowLocalhost: allowLocal });
+    const parsedSaved = new URL(saved.baseUrl);
+    const hasNewKey = Boolean(body.qwenApiKey && body.qwenApiKey.trim());
 
-  const result = await testQwenConnection(config);
-  res.status(result.ok ? 200 : 400).json(result);
+    if (
+      parsedTarget.hostname !== parsedSaved.hostname &&
+      !isTrustedQwenHost(parsedTarget.hostname) &&
+      !hasNewKey
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Для проверки нового стороннего хоста введите API-ключ явно в форме.'
+      });
+    }
+
+    const config = {
+      apiKey: hasNewKey ? body.qwenApiKey.trim() : saved.apiKey,
+      baseUrl,
+      model: body.qwenModel && body.qwenModel.trim() ? body.qwenModel.trim() : saved.model
+    };
+
+    const result = await testQwenConnection(config);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
 });
 
 // ========================
@@ -274,13 +382,14 @@ io.on('connection', (socket) => {
     try {
       const player = game.registerOrReconnectPlayer({
         playerId: payload?.playerId,
+        playerToken: payload?.playerToken,
         name: payload?.name,
         socketId: socket.id
       });
       socket.data.playerId = player.id;
       const state = game.buildStudentStateForPlayer(player.id);
       socket.emit('game:state', state);
-      respond(cb, { ok: true, playerId: player.id, state });
+      respond(cb, { ok: true, playerId: player.id, playerToken: player.token, state });
     } catch (err) {
       respond(cb, { ok: false, error: err.message });
     }
@@ -440,6 +549,7 @@ io.on('connection', (socket) => {
       if (payload?.useFallback) {
         const fallbackRes = fallbackJudgeAnswers({
           referenceAnswer: round.referenceAnswer,
+          referenceAnswerKk: round.referenceAnswerKk,
           teamAnswers,
           reason: payload?.reason || 'Выбрана резервная автооценка'
         });
@@ -452,6 +562,7 @@ io.on('connection', (socket) => {
         const aiResult = await judgeRoundAnswers({
           question: round.question,
           referenceAnswer: round.referenceAnswer,
+          referenceAnswerKk: round.referenceAnswerKk,
           criteria: round.criteria,
           teamAnswers,
           config: game.getQwenRuntimeConfig()
@@ -579,4 +690,7 @@ server.listen(PORT, () => {
   console.log(`Ссылка для студентов: http://localhost:${PORT}/`);
   console.log(`Панель администратора: http://localhost:${PORT}/admin`);
   console.log(`Логин администратора: ${ADMIN_LOGIN}`);
+  if (GENERATED_ADMIN_PASSWORD) {
+    console.log(`Сгенерирован одноразовый пароль администратора (задайте ADMIN_PASSWORD в .env): ${GENERATED_ADMIN_PASSWORD}`);
+  }
 });

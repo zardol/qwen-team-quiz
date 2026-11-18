@@ -1,6 +1,8 @@
 (() => {
   const STORAGE_ID_KEY = 'qwen_quiz_player_id';
+  const STORAGE_TOKEN_KEY = 'qwen_quiz_player_token';
   const STORAGE_NAME_KEY = 'qwen_quiz_player_name';
+  const { t, pickLocalized, initLangSwitcher } = window.QuizI18n;
 
   const socket = io({
     reconnection: true,
@@ -9,6 +11,7 @@
   });
 
   let currentState = null;
+  let isConnected = false;
   let selectedEmoji = '🚀';
   let lastRoundKey = null;
   let captainDirty = false;
@@ -99,13 +102,23 @@
     }
   }
 
+  function updateConnectionLabel() {
+    if (isConnected) {
+      els.connectionStatus.innerHTML = `<span class="dot online"></span> ${escapeHtml(t('online'))}`;
+    } else {
+      els.connectionStatus.innerHTML = `<span class="dot offline"></span> ${escapeHtml(t('reconnecting'))}`;
+    }
+  }
+
   function renderTimer(remainingSeconds, durationSeconds, isPaused) {
     const total = Math.max(1, Number(durationSeconds) || 60);
     const rem = Math.max(0, Number(remainingSeconds) || 0);
     const pct = Math.max(0, Math.min(100, (rem / total) * 100));
 
-    els.roundTimerValue.textContent = isPaused ? `${formatTime(rem)} (ПАУЗА)` : formatTime(rem);
-    els.roundTimerLabel.textContent = isPaused ? 'Таймер на паузе' : 'Осталось времени';
+    els.roundTimerValue.textContent = isPaused
+      ? `${formatTime(rem)} ${t('paused_suffix')}`
+      : formatTime(rem);
+    els.roundTimerLabel.textContent = isPaused ? t('timer_paused_label') : t('time_left');
     els.roundTimerBar.style.width = `${pct}%`;
 
     const isUrgent = !isPaused && rem > 0 && rem <= 15;
@@ -114,7 +127,9 @@
   }
 
   function renderTopBar(state) {
-    els.quizTitle.textContent = state.quizTitle || 'Командный квиз';
+    document.title = t('page_title_student');
+    els.quizTitle.textContent = pickLocalized(state.quizTitle, state.quizTitleKk) || t('default_quiz_title');
+    updateConnectionLabel();
 
     if (!state.player) {
       els.playerMeta.innerHTML = '';
@@ -126,16 +141,19 @@
     ];
     if (state.myTeam) {
       parts.push(
-        `<span class="pill pill-primary">${escapeHtml(state.myTeam.emoji)} ${escapeHtml(state.myTeam.name)} · ${state.myTeam.totalScore} б.</span>`
+        `<span class="pill pill-primary">${escapeHtml(state.myTeam.emoji)} ${escapeHtml(state.myTeam.name)} · ${state.myTeam.totalScore} ${escapeHtml(t('pts_short'))}</span>`
       );
     }
-    parts.push(`<button type="button" class="btn btn-secondary btn-sm" id="logout-player-btn">Сменить имя</button>`);
+    parts.push(
+      `<button type="button" class="btn btn-secondary btn-sm" id="logout-player-btn">${escapeHtml(t('change_name'))}</button>`
+    );
     els.playerMeta.innerHTML = parts.join('');
 
     const logoutBtn = document.getElementById('logout-player-btn');
     if (logoutBtn) {
       logoutBtn.addEventListener('click', () => {
         localStorage.removeItem(STORAGE_ID_KEY);
+        localStorage.removeItem(STORAGE_TOKEN_KEY);
         localStorage.removeItem(STORAGE_NAME_KEY);
         window.location.reload();
       });
@@ -164,7 +182,7 @@
 
   function renderTeamsList(container, teams, { allowJoin = false, myTeamId = null } = {}) {
     if (!teams.length) {
-      container.innerHTML = '<div class="muted">Команд пока нет. Создайте первую команду!</div>';
+      container.innerHTML = `<div class="muted">${escapeHtml(t('no_teams_yet'))}</div>`;
       return;
     }
 
@@ -172,12 +190,15 @@
       .map((team) => {
         const isMine = team.id === myTeamId;
         const memberNames = team.members
-          .map((m) => `${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}${m.isOnline ? '' : ' (офлайн)'}`)
+          .map(
+            (m) =>
+              `${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}${m.isOnline ? '' : ` ${escapeHtml(t('offline_tag'))}`}`
+          )
           .join(', ');
 
         const actionHtml = allowJoin
-          ? `<button type="button" class="btn btn-sm ${isMine ? 'btn-secondary' : ''}" data-join-team="${escapeHtml(team.id)}" ${isMine ? 'disabled' : ''}>${isMine ? 'Ваша команда' : 'Вступить'}</button>`
-          : `<span class="pill">${team.memberCount} уч. · ${team.totalScore} б.</span>`;
+          ? `<button type="button" class="btn btn-sm ${isMine ? 'btn-secondary' : ''}" data-join-team="${escapeHtml(team.id)}" ${isMine ? 'disabled' : ''}>${escapeHtml(isMine ? t('your_team_btn') : t('join_btn'))}</button>`
+          : `<span class="pill">${team.memberCount} ${escapeHtml(t('members_short'))} · ${team.totalScore} ${escapeHtml(t('pts_short'))}</span>`;
 
         return `
           <div class="team-item">
@@ -186,7 +207,7 @@
               <div>
                 <div class="team-name">${escapeHtml(team.name)}</div>
                 <div class="muted" style="font-size: 0.82rem;">
-                  ${team.memberCount} уч.: ${memberNames || 'пока никого'}
+                  ${team.memberCount} ${escapeHtml(t('members_short'))}: ${memberNames || escapeHtml(t('nobody_yet'))}
                 </div>
               </div>
             </div>
@@ -202,9 +223,9 @@
           const teamId = btn.dataset.joinTeam;
           socket.emit('student:join_team', { teamId }, (res) => {
             if (!res?.ok) {
-              showToast(res?.error || 'Не удалось вступить в команду', 'error');
+              showToast(res?.error || t('toast_join_err'), 'error');
             } else {
-              showToast('Вы присоединились к команде!', 'success');
+              showToast(t('toast_joined'), 'success');
             }
           });
         });
@@ -227,19 +248,17 @@
 
     els.myTeamLobbyCard.innerHTML = `
       <div class="card-title">
-        <span>${escapeHtml(team.emoji)} Ваша команда: ${escapeHtml(team.name)}</span>
+        <span>${escapeHtml(t('your_team_title', { emoji: team.emoji, name: team.name }))}</span>
         <span class="pill ${team.isCaptain ? 'pill-success' : 'pill-primary'}">
-          ${team.isCaptain ? '👑 Вы капитан (отправляете ответ)' : 'Участник команды'}
+          ${escapeHtml(team.isCaptain ? t('role_captain') : t('role_member'))}
         </span>
       </div>
       <p class="muted" style="margin-top: 0;">
-        ${team.isCaptain
-          ? 'Во время раунда вы будете видеть идеи участников и отправлять итоговый ответ команды.'
-          : 'Во время раунда вы сможете предлагать свои варианты ответа капитану команды.'}
+        ${escapeHtml(team.isCaptain ? t('captain_hint') : t('member_hint'))}
       </p>
       <div class="member-chips">${membersHtml}</div>
       <div style="margin-top: 14px;">
-        <button type="button" class="btn btn-secondary btn-sm" id="leave-team-btn">Сменить / покинуть команду</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="leave-team-btn">${escapeHtml(t('leave_team_btn'))}</button>
       </div>
     `;
 
@@ -247,7 +266,7 @@
     if (leaveBtn) {
       leaveBtn.addEventListener('click', () => {
         socket.emit('student:leave_team', (res) => {
-          if (!res?.ok) showToast(res?.error || 'Ошибка выхода из команды', 'error');
+          if (!res?.ok) showToast(res?.error || t('toast_leave_err'), 'error');
         });
       });
     }
@@ -268,9 +287,16 @@
       els.captainAnswerInput.value = team.submission.text;
     }
 
-    els.roundHeading.textContent = `Раунд ${round.roundNumber} из ${round.totalQuestions}: ${round.title}`;
+    const locTitle = pickLocalized(round.title, round.titleKk);
+    const locQuestion = pickLocalized(round.question, round.questionKk);
+
+    els.roundHeading.textContent = t('round_heading', {
+      num: round.roundNumber,
+      total: round.totalQuestions,
+      title: locTitle
+    });
     els.roundTeamPill.textContent = `${team.emoji} ${team.name}`;
-    els.roundQuestionText.textContent = round.question;
+    els.roundQuestionText.textContent = locQuestion;
 
     renderTimer(round.remainingSeconds, round.durationSeconds, round.isPaused);
 
@@ -282,19 +308,17 @@
       els.roundStatusBanner.classList.add('hidden');
     } else if (isLocked) {
       els.roundStatusBanner.className = 'alert alert-warning';
-      els.roundStatusBanner.innerHTML =
-        `⏱️ Приём ответов завершён. ${
-          team.submission
-            ? `Итоговый ответ вашей команды: <strong>${escapeHtml(team.submission.text)}</strong>`
-            : 'Ваша команда не успела отправить ответ.'
-        }`;
+      els.roundStatusBanner.innerHTML = `${escapeHtml(t('round_locked_msg'))} ${
+        team.submission
+          ? `${escapeHtml(t('your_team_final_ans'))} <strong>${escapeHtml(team.submission.text)}</strong>`
+          : escapeHtml(t('no_answer_submitted'))
+      }`;
       els.roundStatusBanner.classList.remove('hidden');
     } else if (isJudging) {
       els.roundStatusBanner.className = 'alert alert-success';
-      els.roundStatusBanner.innerHTML =
-        `<div style="display:flex; align-items:center; gap:12px;">
+      els.roundStatusBanner.innerHTML = `<div style="display:flex; align-items:center; gap:12px;">
           <span class="spinner"></span>
-          <span><strong>ИИ-судья Qwen оценивает ответы всех команд...</strong></span>
+          <span><strong>${escapeHtml(t('qwen_judging_msg'))}</strong></span>
         </div>`;
       els.roundStatusBanner.classList.remove('hidden');
     }
@@ -305,27 +329,27 @@
 
     if (team.isCaptain) {
       if (team.submission) {
-        els.captainSubmittedBanner.innerHTML = `✅ Ответ команды отправлен: <strong>${escapeHtml(team.submission.text)}</strong> (можно обновить до конца таймера)`;
+        els.captainSubmittedBanner.innerHTML = `${escapeHtml(t('captain_submitted_banner'))} <strong>${escapeHtml(team.submission.text)}</strong> ${escapeHtml(t('can_update_before_end'))}`;
         els.captainSubmittedBanner.classList.remove('hidden');
-        els.captainSubmitBtn.textContent = 'Обновить ответ команды';
+        els.captainSubmitBtn.textContent = t('update_final_btn');
       } else {
         els.captainSubmittedBanner.classList.add('hidden');
-        els.captainSubmitBtn.textContent = 'Отправить итоговый ответ команды';
+        els.captainSubmitBtn.textContent = t('send_final_btn');
       }
     } else {
       if (team.submission) {
         els.memberOfficialStatus.className = 'alert alert-success';
-        els.memberOfficialStatus.innerHTML = `✅ Капитан отправил ответ команды: <strong>${escapeHtml(team.submission.text)}</strong>`;
+        els.memberOfficialStatus.innerHTML = `${escapeHtml(t('member_official_sent'))} <strong>${escapeHtml(team.submission.text)}</strong>`;
       } else {
         els.memberOfficialStatus.className = 'alert alert-warning';
-        els.memberOfficialStatus.textContent = '⏳ Капитан ещё не отправил итоговый ответ команды.';
+        els.memberOfficialStatus.textContent = t('member_official_waiting');
       }
     }
 
     const ideas = team.ideas || [];
     els.ideasCountPill.textContent = String(ideas.length);
     if (!ideas.length) {
-      els.teamIdeasFeed.innerHTML = '<div class="muted">Пока нет предложений. Обсудите вопрос и предложите варианты!</div>';
+      els.teamIdeasFeed.innerHTML = `<div class="muted">${escapeHtml(t('no_ideas_yet'))}</div>`;
     } else {
       els.teamIdeasFeed.innerHTML = [...ideas]
         .reverse()
@@ -338,7 +362,7 @@
               </div>
               ${
                 isActive && team.isCaptain
-                  ? `<button type="button" class="btn btn-sm btn-secondary use-idea-btn" data-idea-text="${escapeHtml(idea.text)}">Подставить</button>`
+                  ? `<button type="button" class="btn btn-sm btn-secondary use-idea-btn" data-idea-text="${escapeHtml(idea.text)}">${escapeHtml(t('use_idea_btn'))}</button>`
                   : ''
               }
             </div>
@@ -352,7 +376,7 @@
             els.captainAnswerInput.value = btn.dataset.ideaText;
             captainDirty = true;
             els.captainAnswerInput.focus();
-            showToast('Идея подставлена в поле ответа. Нажмите «Отправить».');
+            showToast(t('toast_idea_inserted'));
           });
         });
       }
@@ -367,7 +391,7 @@
 
   function renderLeaderboard(container, leaderboard, myTeamId) {
     if (!leaderboard || !leaderboard.length) {
-      container.innerHTML = '<div class="muted">Рейтинг пока пуст.</div>';
+      container.innerHTML = `<div class="muted">${escapeHtml(t('leaderboard_empty'))}</div>`;
       return;
     }
 
@@ -384,12 +408,12 @@
               <div>
                 <div style="font-weight:700;">
                   ${escapeHtml(team.emoji)} ${escapeHtml(team.name)}
-                  ${isMine ? '<span class="pill pill-primary" style="margin-left:6px;">Вы</span>' : ''}
+                  ${isMine ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('you_pill'))}</span>` : ''}
                 </div>
-                <div class="muted" style="font-size:0.8rem;">${team.memberCount} уч.</div>
+                <div class="muted" style="font-size:0.8rem;">${team.memberCount} ${escapeHtml(t('members_short'))}</div>
               </div>
             </div>
-            <div style="font-weight:800; font-size:1.05rem;">${team.totalScore} б.</div>
+            <div style="font-weight:800; font-size:1.05rem;">${team.totalScore} ${escapeHtml(t('pts_short'))}</div>
           </div>
         `;
       })
@@ -401,17 +425,23 @@
     const res = state.roundResults;
     if (!round || !res) return;
 
-    els.resultsRoundTitle.textContent = `Итоги раунда ${round.roundNumber}: ${round.title}`;
+    const locTitle = pickLocalized(round.title, round.titleKk);
+    const locRefAnswer = pickLocalized(res.referenceAnswer, res.referenceAnswerKk);
+
+    els.resultsRoundTitle.textContent = t('results_title', {
+      num: round.roundNumber,
+      title: locTitle
+    });
     const sourceLabel =
       res.judgeSource === 'qwen'
-        ? `⚖️ Судья: ${res.modelUsed || 'Qwen AI'}`
+        ? t('judge_qwen', { model: res.modelUsed || 'Qwen AI' })
         : res.judgeSource === 'manual'
-          ? '✍️ Оценка ведущего'
-          : '⚙️ Автооценка';
+          ? t('judge_manual')
+          : t('judge_fallback');
     els.resultsJudgeBadge.textContent = sourceLabel;
 
-    els.resultsReferenceAnswer.textContent = res.referenceAnswer;
-    els.resultsSummary.innerHTML = `<strong>Вердикт судьи:</strong> ${escapeHtml(res.roundSummary)}`;
+    els.resultsReferenceAnswer.textContent = locRefAnswer;
+    els.resultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
 
     const myTeamId = state.myTeam?.id;
     els.resultsEvaluations.innerHTML = res.evaluations
@@ -422,13 +452,13 @@
             <div class="eval-head">
               <div style="font-weight:700;">
                 ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.teamName)}
-                ${isMine ? '<span class="pill pill-primary" style="margin-left:6px;">Ваша команда</span>' : ''}
+                ${isMine ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('your_team_pill'))}</span>` : ''}
               </div>
               <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
             </div>
             <div style="margin-bottom:6px; font-size:0.93rem;">
-              <span class="muted">Ответ:</span>
-              ${ev.answer ? `<strong>${escapeHtml(ev.answer)}</strong>` : '<span class="muted">нет ответа</span>'}
+              <span class="muted">${escapeHtml(t('answer_label'))}</span>
+              ${ev.answer ? `<strong>${escapeHtml(ev.answer)}</strong>` : `<span class="muted">${escapeHtml(t('no_answer_label'))}</span>`}
             </div>
             <div class="muted" style="font-size:0.9rem;">
               💬 ${escapeHtml(ev.comment)}
@@ -446,23 +476,26 @@
 
     const history = state.roundHistory || [];
     if (!history.length) {
-      els.finalHistory.innerHTML = '<div class="muted">Раунды не были завершены.</div>';
+      els.finalHistory.innerHTML = `<div class="muted">${escapeHtml(t('no_finished_rounds'))}</div>`;
       return;
     }
 
     els.finalHistory.innerHTML = history
-      .map(
-        (h) => `
+      .map((h) => {
+        const locTitle = pickLocalized(h.title, h.titleKk);
+        const locQuestion = pickLocalized(h.question, h.questionKk);
+        const locRef = pickLocalized(h.referenceAnswer, h.referenceAnswerKk);
+        return `
           <div class="eval-card">
-            <div style="font-weight:700; margin-bottom:4px;">Раунд ${h.roundNumber}: ${escapeHtml(h.title)}</div>
-            <div class="muted" style="margin-bottom:6px;">${escapeHtml(h.question)}</div>
+            <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(t('round_prefix'))} ${h.roundNumber}: ${escapeHtml(locTitle)}</div>
+            <div class="muted" style="margin-bottom:6px;">${escapeHtml(locQuestion)}</div>
             <div style="font-size:0.92rem; color:#6ee7b7; margin-bottom:4px;">
-              <strong>Ответ:</strong> ${escapeHtml(h.referenceAnswer)}
+              <strong>${escapeHtml(t('answer_prefix'))}</strong> ${escapeHtml(locRef)}
             </div>
             <div class="muted" style="font-size:0.88rem;">${escapeHtml(h.roundSummary)}</div>
           </div>
-        `
-      )
+        `;
+      })
       .join('');
   }
 
@@ -478,7 +511,7 @@
     if (!state.myTeam) {
       showOnlyScreen('teamSelect');
       renderEmojiPicker(state.availableEmojis);
-      els.teamsCountPill.textContent = `${state.teams.length} команд`;
+      els.teamsCountPill.textContent = t('teams_count', { n: state.teams.length });
       renderTeamsList(els.availableTeamsList, state.teams, { allowJoin: true });
       return;
     }
@@ -486,7 +519,7 @@
     if (state.status === 'LOBBY') {
       showOnlyScreen('lobby');
       renderMyTeamLobby(state);
-      els.lobbyTeamsCount.textContent = `${state.teams.length} команд`;
+      els.lobbyTeamsCount.textContent = t('teams_count', { n: state.teams.length });
       renderTeamsList(els.lobbyTeamsList, state.teams, {
         allowJoin: false,
         myTeamId: state.myTeam.id
@@ -516,6 +549,15 @@
     }
   }
 
+  initLangSwitcher(() => {
+    if (currentState) {
+      render(currentState);
+    } else {
+      document.title = t('page_title_student');
+      updateConnectionLabel();
+    }
+  });
+
   // ========================
   // Event Handlers
   // ========================
@@ -526,15 +568,23 @@
     if (!name) return;
 
     const existingId = localStorage.getItem(STORAGE_ID_KEY) || undefined;
-    socket.emit('student:register', { playerId: existingId, name }, (res) => {
-      if (!res?.ok) {
-        showToast(res?.error || 'Не удалось войти', 'error');
-        return;
+    const existingToken = localStorage.getItem(STORAGE_TOKEN_KEY) || undefined;
+    socket.emit(
+      'student:register',
+      { playerId: existingId, playerToken: existingToken, name },
+      (res) => {
+        if (!res?.ok) {
+          showToast(res?.error || t('toast_login_err'), 'error');
+          return;
+        }
+        localStorage.setItem(STORAGE_ID_KEY, res.playerId);
+        if (res.playerToken) {
+          localStorage.setItem(STORAGE_TOKEN_KEY, res.playerToken);
+        }
+        localStorage.setItem(STORAGE_NAME_KEY, name);
+        if (res.state) render(res.state);
       }
-      localStorage.setItem(STORAGE_ID_KEY, res.playerId);
-      localStorage.setItem(STORAGE_NAME_KEY, name);
-      if (res.state) render(res.state);
-    });
+    );
   });
 
   els.createTeamForm.addEventListener('submit', (e) => {
@@ -544,11 +594,11 @@
 
     socket.emit('student:create_team', { name, emoji: selectedEmoji }, (res) => {
       if (!res?.ok) {
-        showToast(res?.error || 'Не удалось создать команду', 'error');
+        showToast(res?.error || t('toast_create_team_err'), 'error');
         return;
       }
       els.newTeamName.value = '';
-      showToast('Команда создана! Вы назначены капитаном 👑', 'success');
+      showToast(t('toast_team_created'), 'success');
     });
   });
 
@@ -560,16 +610,16 @@
     e.preventDefault();
     const text = els.captainAnswerInput.value.trim();
     if (!text) {
-      showToast('Введите итоговый ответ команды', 'error');
+      showToast(t('toast_enter_answer'), 'error');
       return;
     }
     socket.emit('student:submit_answer', { text }, (res) => {
       if (!res?.ok) {
-        showToast(res?.error || 'Не удалось отправить ответ', 'error');
+        showToast(res?.error || t('toast_send_err'), 'error');
         return;
       }
       captainDirty = false;
-      showToast('Итоговый ответ команды отправлен!', 'success');
+      showToast(t('toast_answer_sent'), 'success');
     });
   });
 
@@ -580,11 +630,11 @@
 
     socket.emit('student:submit_idea', { text }, (res) => {
       if (!res?.ok) {
-        showToast(res?.error || 'Не удалось отправить идею', 'error');
+        showToast(res?.error || t('toast_idea_err'), 'error');
         return;
       }
       els.memberIdeaInput.value = '';
-      showToast('Идея отправлена команде!', 'success');
+      showToast(t('toast_idea_sent'), 'success');
     });
   });
 
@@ -595,7 +645,7 @@
 
     socket.emit('student:submit_idea', { text }, (res) => {
       if (!res?.ok) {
-        showToast(res?.error || 'Ошибка отправки', 'error');
+        showToast(res?.error || t('toast_idea_err'), 'error');
         return;
       }
       els.captainIdeaInput.value = '';
@@ -607,22 +657,32 @@
   // ========================
 
   socket.on('connect', () => {
-    els.connectionStatus.innerHTML = '<span class="dot online"></span> Онлайн';
+    isConnected = true;
+    updateConnectionLabel();
     const savedId = localStorage.getItem(STORAGE_ID_KEY);
+    const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY);
     const savedName = localStorage.getItem(STORAGE_NAME_KEY);
-    if (savedId && savedName) {
+    if (savedId && savedToken && savedName) {
       els.playerNameInput.value = savedName;
-      socket.emit('student:register', { playerId: savedId, name: savedName }, (res) => {
-        if (res?.ok && res.state) {
-          localStorage.setItem(STORAGE_ID_KEY, res.playerId);
-          render(res.state);
+      socket.emit(
+        'student:register',
+        { playerId: savedId, playerToken: savedToken, name: savedName },
+        (res) => {
+          if (res?.ok && res.state) {
+            localStorage.setItem(STORAGE_ID_KEY, res.playerId);
+            if (res.playerToken) {
+              localStorage.setItem(STORAGE_TOKEN_KEY, res.playerToken);
+            }
+            render(res.state);
+          }
         }
-      });
+      );
     }
   });
 
   socket.on('disconnect', () => {
-    els.connectionStatus.innerHTML = '<span class="dot offline"></span> Переподключение...';
+    isConnected = false;
+    updateConnectionLabel();
   });
 
   socket.on('game:state', (state) => {
@@ -637,6 +697,7 @@
 
   socket.on('student:kicked', () => {
     localStorage.removeItem(STORAGE_ID_KEY);
-    showToast('Ведущий удалил вас из текущей сессии.', 'error');
+    localStorage.removeItem(STORAGE_TOKEN_KEY);
+    showToast(t('toast_kicked'), 'error');
   });
 })();
