@@ -1,0 +1,582 @@
+require('dotenv').config();
+
+const path = require('path');
+const http = require('http');
+const crypto = require('crypto');
+const express = require('express');
+const { Server } = require('socket.io');
+
+const { QuizGameManager, GAME_STATUS } = require('./gameState');
+const {
+  judgeRoundAnswers,
+  fallbackJudgeAnswers,
+  testQwenConnection
+} = require('./qwenJudge');
+
+const PORT = Number(process.env.PORT) || 3000;
+const ADMIN_LOGIN = (process.env.ADMIN_LOGIN || 'admin').trim();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const SESSION_SECRET =
+  process.env.ADMIN_SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+function signAdminToken(login) {
+  const payload = {
+    login,
+    exp: Date.now() + TOKEN_TTL_MS,
+    nonce: crypto.randomBytes(8).toString('hex')
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(encoded)
+    .digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+function verifyAdminToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+
+  const expectedSig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(encoded)
+    .digest('base64url');
+
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expectedBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!payload || typeof payload.exp !== 'number' || payload.exp < Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function safeEqualText(a, b) {
+  const bufA = Buffer.from(String(a || ''), 'utf8');
+  const bufB = Buffer.from(String(b || ''), 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  pingTimeout: 25000,
+  pingInterval: 10000,
+  cors: {
+    origin: '*'
+  }
+});
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+const game = new QuizGameManager();
+
+function broadcastFullState() {
+  const sockets = io.sockets.sockets;
+  for (const socket of sockets.values()) {
+    if (socket.data.isAdmin) {
+      continue;
+    }
+    const state = game.buildStudentStateForPlayer(socket.data.playerId || null);
+    socket.emit('game:state', state);
+  }
+  io.to('admins').emit('admin:state', game.buildAdminState());
+}
+
+game.setChangeHandler(broadcastFullState);
+
+// Sync timer tick every second during an active round
+setInterval(() => {
+  if (game.status !== GAME_STATUS.ROUND_ACTIVE) return;
+  const round = game.getCurrentRound();
+  if (!round) return;
+  io.emit('game:timer', {
+    remainingSeconds: game.getRemainingSeconds(round),
+    durationSeconds: round.durationSeconds,
+    isPaused: round.isPaused
+  });
+}, 1000);
+
+function extractTokenFromRequest(req) {
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer ')) {
+    return auth.slice(7).trim();
+  }
+  return req.headers['x-admin-token'] || '';
+}
+
+function requireAdminHttp(req, res, next) {
+  const token = extractTokenFromRequest(req);
+  const verified = verifyAdminToken(token);
+  if (!verified) {
+    return res.status(401).json({ error: 'Требуется авторизация администратора.' });
+  }
+  req.admin = verified;
+  next();
+}
+
+// ========================
+// Page & Health Routes
+// ========================
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    status: game.status,
+    teams: game.teams.size,
+    onlinePlayers: Array.from(game.players.values()).filter((p) => p.isOnline).length,
+    uptimeSec: Math.round(process.uptime())
+  });
+});
+
+// ========================
+// Admin Auth & CRUD API
+// ========================
+
+app.post('/api/admin/login', (req, res) => {
+  const { login, password } = req.body || {};
+  const loginOk = safeEqualText(String(login || '').trim(), ADMIN_LOGIN);
+  const passOk = safeEqualText(String(password || ''), ADMIN_PASSWORD);
+
+  if (!loginOk || !passOk) {
+    return res.status(401).json({ error: 'Неверный логин или пароль администратора.' });
+  }
+
+  const token = signAdminToken(ADMIN_LOGIN);
+  return res.json({
+    ok: true,
+    token,
+    login: ADMIN_LOGIN
+  });
+});
+
+app.get('/api/admin/verify', requireAdminHttp, (req, res) => {
+  res.json({ ok: true, login: req.admin.login });
+});
+
+app.get('/api/admin/state', requireAdminHttp, (req, res) => {
+  res.json(game.buildAdminState());
+});
+
+app.get('/api/admin/questions', requireAdminHttp, (req, res) => {
+  res.json({ questions: game.getQuestions() });
+});
+
+app.post('/api/admin/questions', requireAdminHttp, (req, res) => {
+  try {
+    const question = game.addQuestion(req.body);
+    res.status(201).json({ ok: true, question, questions: game.getQuestions() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/questions/:id', requireAdminHttp, (req, res) => {
+  try {
+    const question = game.updateQuestion(req.params.id, req.body);
+    res.json({ ok: true, question, questions: game.getQuestions() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/questions/:id', requireAdminHttp, (req, res) => {
+  try {
+    game.deleteQuestion(req.params.id);
+    res.json({ ok: true, questions: game.getQuestions() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/questions/:id/move', requireAdminHttp, (req, res) => {
+  try {
+    const questions = game.moveQuestion(req.params.id, req.body?.direction);
+    res.json({ ok: true, questions });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/settings', requireAdminHttp, (req, res) => {
+  res.json({ settings: game.getAdminSettings() });
+});
+
+app.post('/api/admin/settings', requireAdminHttp, (req, res) => {
+  try {
+    const settings = game.updateAdminSettings(req.body || {});
+    res.json({ ok: true, settings });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/test-qwen', requireAdminHttp, async (req, res) => {
+  const saved = game.getQwenRuntimeConfig();
+  const body = req.body || {};
+  const config = {
+    apiKey: body.qwenApiKey && body.qwenApiKey.trim() ? body.qwenApiKey.trim() : saved.apiKey,
+    baseUrl: body.qwenBaseUrl && body.qwenBaseUrl.trim() ? body.qwenBaseUrl.trim() : saved.baseUrl,
+    model: body.qwenModel && body.qwenModel.trim() ? body.qwenModel.trim() : saved.model
+  };
+
+  const result = await testQwenConnection(config);
+  res.status(result.ok ? 200 : 400).json(result);
+});
+
+// ========================
+// Socket.io Real-time Layer
+// ========================
+
+function respond(cb, payload) {
+  if (typeof cb === 'function') cb(payload);
+}
+
+io.on('connection', (socket) => {
+  const auth = socket.handshake.auth || {};
+  if (auth.role === 'admin') {
+    const verified = verifyAdminToken(auth.token);
+    if (verified) {
+      socket.data.isAdmin = true;
+      socket.join('admins');
+      socket.emit('admin:state', game.buildAdminState());
+    } else {
+      socket.emit('admin:auth_error', { error: 'Сессия администратора истекла.' });
+    }
+  } else {
+    socket.emit('game:state', game.buildStudentStateForPlayer(null));
+  }
+
+  // ---- Student Events ----
+
+  socket.on('student:register', (payload, cb) => {
+    try {
+      const player = game.registerOrReconnectPlayer({
+        playerId: payload?.playerId,
+        name: payload?.name,
+        socketId: socket.id
+      });
+      socket.data.playerId = player.id;
+      const state = game.buildStudentStateForPlayer(player.id);
+      socket.emit('game:state', state);
+      respond(cb, { ok: true, playerId: player.id, state });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:rename', (payload, cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
+      game.renamePlayer(socket.data.playerId, payload?.name);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:create_team', (payload, cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Сначала введите своё имя.');
+      const team = game.createTeam(socket.data.playerId, payload || {});
+      respond(cb, { ok: true, teamId: team.id });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:join_team', (payload, cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Сначала введите своё имя.');
+      const team = game.joinTeam(socket.data.playerId, payload?.teamId);
+      respond(cb, { ok: true, teamId: team.id });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:leave_team', (cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
+      if (game.status !== GAME_STATUS.LOBBY) {
+        throw new Error('Сменять команду можно только в лобби до начала раунда.');
+      }
+      game.leaveTeam(socket.data.playerId);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:submit_idea', (payload, cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
+      const idea = game.submitIdea(socket.data.playerId, payload?.text);
+      respond(cb, { ok: true, idea });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:submit_answer', (payload, cb) => {
+    try {
+      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
+      const submission = game.submitTeamAnswer(socket.data.playerId, payload?.text);
+      respond(cb, { ok: true, submission });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  // ---- Admin Events ----
+
+  function ensureAdmin() {
+    if (!socket.data.isAdmin) {
+      throw new Error('Нет прав администратора.');
+    }
+  }
+
+  socket.on('admin:auth', (payload, cb) => {
+    const verified = verifyAdminToken(payload?.token);
+    if (!verified) {
+      respond(cb, { ok: false, error: 'Недействительный токен.' });
+      return;
+    }
+    socket.data.isAdmin = true;
+    socket.join('admins');
+    const state = game.buildAdminState();
+    socket.emit('admin:state', state);
+    respond(cb, { ok: true, state });
+  });
+
+  socket.on('admin:start_round', (payload, cb) => {
+    try {
+      ensureAdmin();
+      const idx = payload?.questionIndex !== undefined ? payload.questionIndex : 0;
+      game.startRound(idx);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:toggle_pause', (cb) => {
+    try {
+      ensureAdmin();
+      game.togglePauseRound();
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:add_time', (payload, cb) => {
+    try {
+      ensureAdmin();
+      game.addTimeToRound(payload?.seconds || 30);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:lock_round', (cb) => {
+    try {
+      ensureAdmin();
+      game.lockRound();
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:reopen_round', (payload, cb) => {
+    try {
+      ensureAdmin();
+      game.reopenRound(payload?.seconds || 30);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:judge_round', async (payload, cb) => {
+    try {
+      ensureAdmin();
+      const round = game.getCurrentRound();
+      if (!round) throw new Error('Сначала выберите и запустите раунд.');
+
+      if (game.status === GAME_STATUS.ROUND_ACTIVE) {
+        game.lockRound();
+      }
+      if (game.teams.size === 0) {
+        throw new Error('В квизе пока нет ни одной команды.');
+      }
+
+      game.setJudgingStatus(true);
+      const teamAnswers = game.getTeamAnswersForJudging();
+
+      if (payload?.useFallback) {
+        const fallbackRes = fallbackJudgeAnswers({
+          referenceAnswer: round.referenceAnswer,
+          teamAnswers,
+          reason: payload?.reason || 'Выбрана резервная автооценка'
+        });
+        game.setDraftResults(fallbackRes);
+        respond(cb, { ok: true, results: fallbackRes });
+        return;
+      }
+
+      try {
+        const aiResult = await judgeRoundAnswers({
+          question: round.question,
+          referenceAnswer: round.referenceAnswer,
+          criteria: round.criteria,
+          teamAnswers,
+          config: game.getQwenRuntimeConfig()
+        });
+        game.setDraftResults(aiResult);
+        respond(cb, { ok: true, results: aiResult });
+      } catch (judgeErr) {
+        game.setJudgingStatus(false);
+        respond(cb, {
+          ok: false,
+          canUseFallback: true,
+          error: judgeErr.message || 'Ошибка обращения к ИИ Qwen.'
+        });
+      }
+    } catch (err) {
+      game.setJudgingStatus(false);
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:manual_draft', (cb) => {
+    try {
+      ensureAdmin();
+      if (game.status === GAME_STATUS.ROUND_ACTIVE) {
+        game.lockRound();
+      }
+      const draft = game.createManualDraftResults();
+      respond(cb, { ok: true, results: draft });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:update_score', (payload, cb) => {
+    try {
+      ensureAdmin();
+      const updated = game.updateEvaluationScore({
+        teamId: payload?.teamId,
+        score: payload?.score,
+        comment: payload?.comment
+      });
+      respond(cb, { ok: true, results: updated });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:publish_results', (cb) => {
+    try {
+      ensureAdmin();
+      const results = game.publishRoundResults();
+      respond(cb, { ok: true, results });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:finish_quiz', (cb) => {
+    try {
+      ensureAdmin();
+      game.finishQuiz();
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:reset_quiz', (payload, cb) => {
+    try {
+      ensureAdmin();
+      game.resetQuiz({ keepTeams: Boolean(payload?.keepTeams) });
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:set_captain', (payload, cb) => {
+    try {
+      ensureAdmin();
+      game.setTeamCaptain(payload?.teamId, payload?.playerId);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:delete_team', (payload, cb) => {
+    try {
+      ensureAdmin();
+      game.deleteTeam(payload?.teamId);
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('admin:kick_player', (payload, cb) => {
+    try {
+      ensureAdmin();
+      const targetId = payload?.playerId;
+      game.kickPlayer(targetId);
+      for (const s of io.sockets.sockets.values()) {
+        if (s.data.playerId === targetId) {
+          s.data.playerId = null;
+          s.emit('student:kicked');
+          s.emit('game:state', game.buildStudentStateForPlayer(null));
+        }
+      }
+      respond(cb, { ok: true });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    if (!socket.data.isAdmin) {
+      game.handleSocketDisconnect(socket.id);
+    }
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Qwen Team Quiz сервер запущен: http://localhost:${PORT}`);
+  console.log(`Ссылка для студентов: http://localhost:${PORT}/`);
+  console.log(`Панель администратора: http://localhost:${PORT}/admin`);
+  console.log(`Логин администратора: ${ADMIN_LOGIN}`);
+});

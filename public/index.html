@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Командный квиз — Участник</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="container-student">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo">🧠</div>
+        <div>
+          <h1 id="quiz-title">Командный квиз</h1>
+          <div class="brand-sub" id="connection-status">Подключение к серверу...</div>
+        </div>
+      </div>
+      <div class="topbar-meta" id="player-meta"></div>
+    </header>
+
+    <!-- 1. Вход студента -->
+    <section id="screen-login" class="card hidden">
+      <h2 class="card-title">Добро пожаловать в квиз!</h2>
+      <p class="muted">Введите ваше имя или никнейм, чтобы создать команду или присоединиться к уже существующей.</p>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="player-name-input">Ваше имя</label>
+          <input
+            type="text"
+            id="player-name-input"
+            placeholder="Например: Алексей"
+            maxlength="32"
+            required
+            autocomplete="name"
+          />
+        </div>
+        <button type="submit" class="btn btn-block">Войти в квиз</button>
+      </form>
+    </section>
+
+    <!-- 2. Выбор или создание команды -->
+    <section id="screen-team-select" class="hidden">
+      <div class="card card-highlight">
+        <h2 class="card-title">Создать новую команду <span class="pill pill-primary">Вы станете капитаном 👑</span></h2>
+        <form id="create-team-form">
+          <div class="form-group">
+            <label for="new-team-name">Название команды</label>
+            <input
+              type="text"
+              id="new-team-name"
+              placeholder="Например: Квантовые совы"
+              maxlength="36"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label>Выберите эмблему команды</label>
+            <div class="emoji-picker" id="emoji-picker"></div>
+          </div>
+          <button type="submit" class="btn btn-block">Создать команду и стать капитаном</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">
+          Или вступить в существующую команду
+          <span class="pill" id="teams-count-pill">0 команд</span>
+        </h2>
+        <div id="available-teams-list" class="team-list"></div>
+      </div>
+    </section>
+
+    <!-- 3. Лобби команды -->
+    <section id="screen-lobby" class="hidden">
+      <div class="card card-highlight" id="my-team-lobby-card"></div>
+
+      <div class="card">
+        <h2 class="card-title">
+          Все команды в лобби
+          <span class="pill" id="lobby-teams-count">0 команд</span>
+        </h2>
+        <p class="muted">Ожидаем, пока ведущий запустит первый раунд.</p>
+        <div id="lobby-teams-list" class="team-list"></div>
+      </div>
+    </section>
+
+    <!-- 4. Активный раунд / Ожидание вердикта Qwen -->
+    <section id="screen-round" class="hidden">
+      <div class="card card-highlight">
+        <div class="card-title">
+          <span id="round-heading">Раунд 1</span>
+          <span class="pill pill-primary" id="round-team-pill"></span>
+        </div>
+
+        <div class="timer-wrap" id="round-timer-wrap">
+          <div class="timer-head">
+            <span id="round-timer-label">Осталось времени</span>
+            <span class="timer-value" id="round-timer-value">01:30</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="round-timer-bar" style="width: 100%"></div>
+          </div>
+        </div>
+
+        <div class="question-box" id="round-question-text"></div>
+
+        <!-- Статус закрытия / судейства -->
+        <div id="round-status-banner" class="alert alert-warning hidden"></div>
+
+        <!-- Панель Капитана -->
+        <div id="captain-panel" class="hidden">
+          <div class="alert alert-success hidden" id="captain-submitted-banner"></div>
+          <form id="captain-answer-form">
+            <div class="form-group">
+              <label for="captain-answer-input">👑 Итоговый ответ команды (отправляете вы как капитан)</label>
+              <textarea
+                id="captain-answer-input"
+                placeholder="Введите итоговый ответ команды или подставьте идею от участника ниже..."
+                maxlength="800"
+                rows="3"
+              ></textarea>
+            </div>
+            <button type="submit" class="btn btn-success btn-block" id="captain-submit-btn">
+              Отправить итоговый ответ команды
+            </button>
+          </form>
+        </div>
+
+        <!-- Панель обычного участника -->
+        <div id="member-panel" class="hidden">
+          <div class="alert alert-warning" id="member-official-status">
+            Капитан ещё не отправил итоговый ответ команды.
+          </div>
+          <form id="member-idea-form">
+            <div class="form-group">
+              <label for="member-idea-input">💡 Предложить вариант ответа капитану</label>
+              <textarea
+                id="member-idea-input"
+                placeholder="Напишите вашу идею или аргумент для капитана..."
+                maxlength="400"
+                rows="2"
+              ></textarea>
+            </div>
+            <button type="submit" class="btn btn-block">Отправить идею в команду</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Лента идей команды (видят все участники команды, а капитан может также предложить свою заметку) -->
+      <div class="card">
+        <h3 class="card-title">
+          Командное обсуждение (идеи участников)
+          <span class="pill" id="ideas-count-pill">0</span>
+        </h3>
+        <div id="captain-note-form-wrap" class="hidden" style="margin-bottom: 10px;">
+          <form id="captain-idea-form" class="btn-row" style="align-items: stretch;">
+            <input
+              type="text"
+              id="captain-idea-input"
+              placeholder="Написать заметку команде..."
+              maxlength="400"
+              style="flex: 1;"
+            />
+            <button type="submit" class="btn btn-secondary btn-sm">Отправить</button>
+          </form>
+        </div>
+        <div id="team-ideas-feed" class="ideas-feed"></div>
+      </div>
+    </section>
+
+    <!-- 5. Результаты раунда -->
+    <section id="screen-results" class="hidden">
+      <div class="card card-highlight">
+        <div class="card-title">
+          <span id="results-round-title">Итоги раунда</span>
+          <span class="pill pill-success" id="results-judge-badge">⚖️ Судья: Qwen</span>
+        </div>
+
+        <div class="reference-box">
+          <div style="font-size: 0.82rem; font-weight: 700; color: #6ee7b7; margin-bottom: 4px;">
+            ПРАВИЛЬНЫЙ (ЭТАЛОННЫЙ) ОТВЕТ
+          </div>
+          <div id="results-reference-answer" style="font-size: 1.05rem; font-weight: 600;"></div>
+        </div>
+
+        <div class="summary-box" id="results-summary"></div>
+
+        <h3 style="margin: 14px 0 10px; font-size: 1rem;">Оценки команд в этом раунде</h3>
+        <div id="results-evaluations"></div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">🏆 Общая турнирная таблица</h3>
+        <div id="results-leaderboard"></div>
+      </div>
+    </section>
+
+    <!-- 6. Финал квиза -->
+    <section id="screen-finished" class="hidden">
+      <div class="card card-highlight">
+        <h2 class="card-title">🎉 Квиз завершён! Итоговый рейтинг</h2>
+        <div id="final-leaderboard"></div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">История раундов</h3>
+        <div id="final-history"></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/student.js"></script>
+</body>
+</html>
