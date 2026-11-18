@@ -54,10 +54,12 @@
     spectatorTimerLabel: document.getElementById('spectator-timer-label'),
     spectatorTimerValue: document.getElementById('spectator-timer-value'),
     spectatorTimerBar: document.getElementById('spectator-timer-bar'),
+    spectatorQuestionBox: document.getElementById('spectator-question-box'),
     spectatorStatusBox: document.getElementById('spectator-status-box'),
     spectatorResultsCard: document.getElementById('spectator-results-card'),
     spectatorResultsTitle: document.getElementById('spectator-results-title'),
     spectatorJudgeBadge: document.getElementById('spectator-judge-badge'),
+    spectatorReferenceAnswer: document.getElementById('spectator-reference-answer'),
     spectatorResultsSummary: document.getElementById('spectator-results-summary'),
     spectatorResultsEvaluations: document.getElementById('spectator-results-evaluations'),
     spectatorTeamsHeading: document.getElementById('spectator-teams-heading'),
@@ -622,15 +624,24 @@
     if (status === 'LOBBY') {
       els.spectatorPhaseTitle.textContent = t('spectator_lobby_title');
       els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorQuestionBox.classList.add('hidden');
       els.spectatorStatusBox.classList.remove('hidden');
       els.spectatorStatusBox.textContent = t('spectator_lobby_hint');
       els.spectatorResultsCard.classList.add('hidden');
       stopTimerLoop();
     } else if (status === 'ROUND_ACTIVE' || status === 'ROUND_LOCKED' || status === 'JUDGING') {
+      const locTitle = round ? pickLocalized(round.title, round.titleKk) : '';
+      const locQuestion = round ? pickLocalized(round.question, round.questionKk) : '';
       els.spectatorPhaseTitle.textContent = round
-        ? `${t('round_prefix')} ${round.roundNumber} / ${round.totalQuestions}`
+        ? t('round_heading', {
+            num: round.roundNumber,
+            total: round.totalQuestions,
+            title: locTitle
+          })
         : t(`phase_${status}`);
       els.spectatorTimerWrap.classList.remove('hidden');
+      els.spectatorQuestionBox.textContent = locQuestion;
+      els.spectatorQuestionBox.classList.toggle('hidden', !locQuestion);
       els.spectatorStatusBox.classList.remove('hidden');
       els.spectatorResultsCard.classList.add('hidden');
 
@@ -658,6 +669,7 @@
         title: pickLocalized(round.title, round.titleKk)
       });
       els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorQuestionBox.classList.add('hidden');
       els.spectatorStatusBox.classList.add('hidden');
       els.spectatorResultsCard.classList.remove('hidden');
 
@@ -672,6 +684,10 @@
           : res.judgeSource === 'manual'
             ? t('judge_manual')
             : t('judge_fallback');
+      els.spectatorReferenceAnswer.textContent = pickLocalized(
+        res.referenceAnswer,
+        res.referenceAnswerKk
+      );
       els.spectatorResultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
       els.spectatorResultsEvaluations.innerHTML = res.evaluations
         .map(
@@ -696,6 +712,7 @@
       stopTimerLoop();
       els.spectatorPhaseTitle.textContent = t('quiz_finished_heading');
       els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorQuestionBox.classList.add('hidden');
       els.spectatorStatusBox.classList.add('hidden');
       els.spectatorResultsCard.classList.add('hidden');
     }

@@ -172,7 +172,12 @@
             </div>
 
             <div class="card" id="admin-unassigned-card">
-              <h3 class="card-title" data-i18n="unassigned_title">Участники без команды</h3>
+              <div class="card-title">
+                <span data-i18n="unassigned_title">Участники без команды</span>
+                <button type="button" class="btn btn-danger btn-sm" id="kick-all-unassigned-btn" data-i18n="kick_all_unassigned">
+                  🗑 Удалить всех
+                </button>
+              </div>
               <div id="admin-unassigned-list"></div>
             </div>
           </div>

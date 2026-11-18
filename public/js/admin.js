@@ -65,6 +65,7 @@
     teamsList: document.getElementById('admin-teams-list'),
     unassignedCard: document.getElementById('admin-unassigned-card'),
     unassignedList: document.getElementById('admin-unassigned-list'),
+    kickAllUnassignedBtn: document.getElementById('kick-all-unassigned-btn'),
     questionFormTitle: document.getElementById('question-form-title'),
     cancelEditQuestionBtn: document.getElementById('cancel-edit-question-btn'),
     questionForm: document.getElementById('question-form'),
@@ -871,6 +872,17 @@
     if (!confirm('Полностью сбросить игру и удалить все команды?')) return;
     socket.emit('admin:reset_quiz', { keepTeams: false }, (res) => {
       if (res?.ok) showToast('Игра полностью сброшена', 'success');
+    });
+  });
+
+  els.kickAllUnassignedBtn.addEventListener('click', () => {
+    if (!confirm('Удалить всех участников без команды из текущей сессии?')) return;
+    socket.emit('admin:kick_unassigned', (res) => {
+      if (!res?.ok) {
+        showToast(res?.error || 'Ошибка удаления участников', 'error');
+        return;
+      }
+      showToast(`Удалено участников без команды: ${res.count}`, 'success');
     });
   });
 

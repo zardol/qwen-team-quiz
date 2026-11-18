@@ -434,6 +434,20 @@ class QuizGameManager {
     this.notifyChanged();
   }
 
+  kickUnassignedPlayers() {
+    const removedIds = [];
+    for (const [id, player] of this.players.entries()) {
+      if (!player.teamId) {
+        this.players.delete(id);
+        removedIds.push(id);
+      }
+    }
+    if (removedIds.length > 0) {
+      this.notifyChanged();
+    }
+    return removedIds;
+  }
+
   getTeamMembers(teamId) {
     const members = [];
     for (const player of this.players.values()) {
@@ -874,7 +888,7 @@ class QuizGameManager {
       });
   }
 
-  buildStudentStateForPlayer(playerId, { isSpectator = false } = {}) {
+  buildStudentStateForPlayer(playerId) {
     const player = playerId ? this.players.get(playerId) : null;
     const round = this.getCurrentRound();
     const myTeam = player?.teamId ? this.teams.get(player.teamId) : null;
@@ -883,14 +897,13 @@ class QuizGameManager {
     if (round) {
       const showAnswer =
         this.status === GAME_STATUS.ROUND_RESULTS || this.status === GAME_STATUS.FINISHED;
-      const hideQuestionForSpectator = isSpectator && !showAnswer;
       publicRound = {
         roundNumber: round.roundNumber,
         totalQuestions: this.questions.length,
-        title: hideQuestionForSpectator ? '' : round.title,
-        titleKk: hideQuestionForSpectator ? '' : (round.titleKk || ''),
-        question: hideQuestionForSpectator ? '' : round.question,
-        questionKk: hideQuestionForSpectator ? '' : (round.questionKk || ''),
+        title: round.title,
+        titleKk: round.titleKk || '',
+        question: round.question,
+        questionKk: round.questionKk || '',
         timeLimit: round.timeLimit,
         durationSeconds: round.durationSeconds,
         remainingSeconds: this.getRemainingSeconds(round),

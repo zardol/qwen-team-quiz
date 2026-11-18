@@ -694,6 +694,24 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('admin:kick_unassigned', (cb) => {
+    try {
+      ensureAdmin();
+      const removedIds = game.kickUnassignedPlayers();
+      const removedSet = new Set(removedIds);
+      for (const s of io.sockets.sockets.values()) {
+        if (s.data.playerId && removedSet.has(s.data.playerId)) {
+          s.data.playerId = null;
+          s.emit('student:kicked');
+          s.emit('game:state', game.buildStudentStateForPlayer(null));
+        }
+      }
+      respond(cb, { ok: true, count: removedIds.length });
+    } catch (err) {
+      respond(cb, { ok: false, error: err.message });
+    }
+  });
+
   socket.on('disconnect', () => {
     if (!socket.data.isAdmin) {
       game.handleSocketDisconnect(socket.id);
