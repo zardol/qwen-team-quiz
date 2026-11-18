@@ -249,8 +249,8 @@
 
     els.evalPanel.classList.remove('hidden');
     els.evalHeading.textContent = isPublished
-      ? '✅ Опубликованные оценки (видны студентам)'
-      : '📋 Предпросмотр оценок (ещё не видны студентам)';
+      ? '✅ Опубликованные оценки раунда'
+      : '📋 Предпросмотр оценок раунда';
 
     els.publishResultsBtn.classList.toggle('hidden', isPublished);
 

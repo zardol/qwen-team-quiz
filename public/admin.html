@@ -102,7 +102,7 @@
 
                 <div class="question-box" id="admin-question-text" style="font-size: 1rem;"></div>
                 <div class="reference-box" style="margin-bottom: 12px;">
-                  <div style="font-size: 0.78rem; font-weight: 700; color: #6ee7b7;" data-i18n="ref_answer_admin_label">ЭТАЛОННЫЙ ОТВЕТ (видит только ведущий)</div>
+                  <div style="font-size: 0.78rem; font-weight: 700; color: #6ee7b7;" data-i18n="ref_answer_admin_label">ЭТАЛОННЫЙ ОТВЕТ</div>
                   <div id="admin-reference-answer"></div>
                 </div>
 
@@ -149,7 +149,7 @@
               <!-- Переход дальше / Финал / Сброс -->
               <div class="btn-row" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
                 <button type="button" class="btn hidden" id="next-round-btn">⏭ Запустить следующий раунд</button>
-                <button type="button" class="btn btn-warning btn-sm" id="finish-quiz-btn" data-i18n="finish_quiz_btn">🏆 Завершить квиз (Финал)</button>
+                <button type="button" class="btn btn-warning btn-sm" id="finish-quiz-btn" data-i18n="finish_quiz_btn">🏆 Завершить квиз</button>
                 <button type="button" class="btn btn-secondary btn-sm" id="reset-scores-btn" data-i18n="reset_scores_btn">🔄 Сбросить очки</button>
                 <button type="button" class="btn btn-danger btn-sm" id="reset-all-btn" data-i18n="reset_all_btn">🗑 Полный сброс</button>
               </div>
@@ -191,22 +191,22 @@
               <input type="hidden" id="q-edit-id" />
               <div class="form-group">
                 <label for="q-title-input">Короткое название / тема раунда</label>
-                <input type="text" id="q-title-input" placeholder="Например: Космическая скорость" required />
+                <input type="text" id="q-title-input" placeholder="Введите тему раунда" required />
               </div>
               <div class="form-group">
                 <label for="q-text-input">Текст вопроса для студентов</label>
                 <textarea id="q-text-input" rows="3" placeholder="Сформулируйте вопрос..." required></textarea>
               </div>
               <div class="form-group">
-                <label for="q-ref-input">Правильный (эталонный) ответ</label>
+                <label for="q-ref-input">Эталонный ответ</label>
                 <textarea id="q-ref-input" rows="2" placeholder="Точный ответ, с которым Qwen будет сравнивать ответы команд..." required></textarea>
               </div>
               <div class="form-group">
-                <label for="q-criteria-input">Подсказка / критерии оценки для ИИ-судьи Qwen (необязательно)</label>
-                <textarea id="q-criteria-input" rows="2" placeholder="Например: оценивайте близость числа или ключевые идеи..."></textarea>
+                <label for="q-criteria-input">Критерии оценки для ИИ-судьи Qwen</label>
+                <textarea id="q-criteria-input" rows="2" placeholder="Укажите критерии оценки ответа..."></textarea>
               </div>
               <div class="form-group">
-                <label for="q-time-input">Время на ответ (в секундах)</label>
+                <label for="q-time-input">Время на ответ, сек</label>
                 <input type="number" id="q-time-input" min="15" max="600" value="90" required />
               </div>
               <button type="submit" class="btn btn-block" id="save-question-btn">➕ Добавить вопрос</button>
@@ -231,30 +231,30 @@
 
           <form id="settings-form">
             <div class="form-group">
-              <label for="setting-quiz-title">Название квиза (видят студенты)</label>
+              <label for="setting-quiz-title">Название квиза</label>
               <input type="text" id="setting-quiz-title" required />
             </div>
 
             <div class="form-group">
-              <label for="setting-default-time">Время раунда по умолчанию (сек)</label>
+              <label for="setting-default-time">Время раунда по умолчанию, сек</label>
               <input type="number" id="setting-default-time" min="15" max="600" value="90" required />
             </div>
 
             <div class="form-group">
               <label for="setting-qwen-key">
-                API-ключ Qwen (QWEN_API_KEY)
+                API-ключ Qwen
                 <span class="pill" id="setting-key-status">Не задан</span>
               </label>
               <input
                 type="password"
                 id="setting-qwen-key"
-                placeholder="Оставьте пустым, чтобы не менять текущий ключ (или вставьте sk-...)"
+                placeholder="Введите новый API-ключ для замены текущего"
                 autocomplete="off"
               />
             </div>
 
             <div class="form-group">
-              <label for="setting-qwen-url">Base URL (OpenAI-compatible endpoint)</label>
+              <label for="setting-qwen-url">Base URL API</label>
               <input
                 type="url"
                 id="setting-qwen-url"
@@ -267,12 +267,12 @@
               <label for="setting-qwen-model">Модель Qwen</label>
               <div class="btn-row">
                 <select id="setting-qwen-model-preset" style="max-width: 220px;">
-                  <option value="qwen-plus">qwen-plus (рекомендуется)</option>
+                  <option value="qwen-plus">qwen-plus</option>
                   <option value="qwen-max">qwen-max</option>
                   <option value="qwen-turbo">qwen-turbo</option>
                   <option value="custom">Другая модель...</option>
                 </select>
-                <input type="text" id="setting-qwen-model" style="flex: 1;" placeholder="Имя модели, например qwen-plus" required />
+                <input type="text" id="setting-qwen-model" style="flex: 1;" placeholder="Название модели" required />
               </div>
             </div>
 
