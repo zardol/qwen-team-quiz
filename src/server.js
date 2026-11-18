@@ -146,7 +146,9 @@ function broadcastFullState() {
     if (socket.data.isAdmin) {
       continue;
     }
-    const state = game.buildStudentStateForPlayer(socket.data.playerId || null);
+    const state = game.buildStudentStateForPlayer(socket.data.playerId || null, {
+      isSpectator: Boolean(socket.data.isSpectator)
+    });
     socket.emit('game:state', state);
   }
   io.to('admins').emit('admin:state', game.buildAdminState());
@@ -161,6 +163,7 @@ setInterval(() => {
   if (!round) return;
   io.emit('game:timer', {
     remainingSeconds: game.getRemainingSeconds(round),
+    remainingMs: game.getRemainingMs(round),
     durationSeconds: round.durationSeconds,
     isPaused: round.isPaused
   });
@@ -378,8 +381,21 @@ io.on('connection', (socket) => {
 
   // ---- Student Events ----
 
+  socket.on('student:set_spectator', (payload, cb) => {
+    socket.data.isSpectator = Boolean(payload?.enabled);
+    if (socket.data.isSpectator) {
+      socket.data.playerId = null;
+    }
+    const state = game.buildStudentStateForPlayer(socket.data.playerId || null, {
+      isSpectator: socket.data.isSpectator
+    });
+    socket.emit('game:state', state);
+    respond(cb, { ok: true, state });
+  });
+
   socket.on('student:register', (payload, cb) => {
     try {
+      socket.data.isSpectator = false;
       const player = game.registerOrReconnectPlayer({
         playerId: payload?.playerId,
         playerToken: payload?.playerToken,

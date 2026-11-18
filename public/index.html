@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
-  <div class="container-student">
+  <div class="container-student" id="main-container">
     <header class="topbar">
       <div class="brand">
         <div class="brand-logo">🧠</div>
@@ -44,6 +44,10 @@
         </div>
         <button type="submit" class="btn btn-block" data-i18n="enter_quiz_btn">Войти в квиз</button>
       </form>
+      <div class="divider-or" data-i18n="or_divider">или</div>
+      <button type="button" class="btn btn-secondary btn-block" id="enter-spectator-btn" data-i18n="enter_spectator_btn">
+        👀 Войти как наблюдатель (Большой экран)
+      </button>
     </section>
 
     <!-- 2. Выбор или создание команды -->
@@ -60,7 +64,7 @@
               type="text"
               id="new-team-name"
               data-i18n-placeholder="team_name_placeholder"
-              placeholder="Например: Барыс"
+              placeholder="Введите название команды"
               maxlength="36"
               required
             />
@@ -218,6 +222,52 @@
       <div class="card">
         <h3 class="card-title" data-i18n="round_history_heading">История раундов</h3>
         <div id="final-history"></div>
+      </div>
+    </section>
+
+    <!-- 7. Режим наблюдателя (Большой экран) -->
+    <section id="screen-spectator" class="hidden">
+      <div class="card card-highlight" id="spectator-top-card">
+        <div class="card-title">
+          <span id="spectator-phase-title">Ожидание начала квиза</span>
+          <span class="pill pill-primary" id="spectator-phase-pill">Лобби</span>
+        </div>
+
+        <div class="timer-wrap hidden" id="spectator-timer-wrap">
+          <div class="timer-head">
+            <span id="spectator-timer-label" data-i18n="time_left">Осталось времени</span>
+            <span class="spectator-timer-value" id="spectator-timer-value">01:00</span>
+          </div>
+          <div class="progress-track" style="height: 14px;">
+            <div class="progress-fill" id="spectator-timer-bar" style="width: 100%"></div>
+          </div>
+        </div>
+
+        <div class="spectator-hidden-q hidden" id="spectator-status-box"></div>
+      </div>
+
+      <div id="spectator-results-card" class="card card-highlight hidden">
+        <div class="card-title">
+          <span id="spectator-results-title">Итоги раунда</span>
+          <span class="pill pill-success" id="spectator-judge-badge">⚖️ Судья: Qwen</span>
+        </div>
+        <div class="summary-box" id="spectator-results-summary"></div>
+        <div id="spectator-results-evaluations"></div>
+      </div>
+
+      <div class="spectator-grid">
+        <div class="card">
+          <div class="card-title">
+            <span id="spectator-teams-heading" data-i18n="spectator_team_status_title">Статус команд в раунде</span>
+            <span class="pill pill-success" id="spectator-answered-pill">0</span>
+          </div>
+          <div id="spectator-teams-list" class="team-list"></div>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title" data-i18n="leaderboard_heading">🏆 Общая турнирная таблица</h3>
+          <div id="spectator-leaderboard"></div>
+        </div>
       </div>
     </section>
   </div>

@@ -143,17 +143,70 @@
     }
   }
 
-  function renderAdminTimer(remainingSeconds, durationSeconds, isPaused) {
-    const total = Math.max(1, Number(durationSeconds) || 60);
-    const rem = Math.max(0, Number(remainingSeconds) || 0);
-    const pct = Math.max(0, Math.min(100, (rem / total) * 100));
+  const adminTimerSync = {
+    active: false,
+    isPaused: false,
+    durationMs: 60000,
+    remainingMsPaused: 0,
+    endsAtPerf: 0,
+    rafId: null
+  };
 
-    els.timerValue.textContent = isPaused ? `${formatTime(rem)} (ПАУЗА)` : formatTime(rem);
-    els.timerBar.style.width = `${pct}%`;
+  function applyAdminTimerDom(remMs, durationMs, isPaused) {
+    const total = Math.max(1000, Number(durationMs) || 60000);
+    const clampedMs = Math.max(0, Number(remMs) || 0);
+    const pct = Math.max(0, Math.min(100, (clampedMs / total) * 100));
+    const remSec = Math.ceil(clampedMs / 1000);
 
-    const urgent = !isPaused && rem > 0 && rem <= 15;
+    els.timerValue.textContent = isPaused
+      ? `${formatTime(remSec)} ${t('paused_suffix')}`
+      : formatTime(remSec);
+    els.timerBar.style.width = `${pct.toFixed(3)}%`;
+
+    const urgent = !isPaused && clampedMs > 0 && clampedMs <= 15000;
     els.timerValue.classList.toggle('urgent', urgent);
     els.timerBar.classList.toggle('urgent', urgent);
+  }
+
+  function stopAdminTimerLoop() {
+    if (adminTimerSync.rafId !== null) {
+      cancelAnimationFrame(adminTimerSync.rafId);
+      adminTimerSync.rafId = null;
+    }
+  }
+
+  function adminTimerFrame() {
+    if (!adminTimerSync.active || adminTimerSync.isPaused) {
+      adminTimerSync.rafId = null;
+      return;
+    }
+    const remMs = Math.max(0, adminTimerSync.endsAtPerf - performance.now());
+    applyAdminTimerDom(remMs, adminTimerSync.durationMs, false);
+    if (remMs > 0) {
+      adminTimerSync.rafId = requestAnimationFrame(adminTimerFrame);
+    } else {
+      adminTimerSync.rafId = null;
+    }
+  }
+
+  function syncAdminTimer({ remainingMs, remainingSeconds, durationSeconds, isPaused, isActive }) {
+    const durMs = Math.max(1000, (Number(durationSeconds) || 60) * 1000);
+    const remMs =
+      typeof remainingMs === 'number'
+        ? Math.max(0, remainingMs)
+        : Math.max(0, (Number(remainingSeconds) || 0) * 1000);
+
+    adminTimerSync.active = Boolean(isActive);
+    adminTimerSync.isPaused = Boolean(isPaused);
+    adminTimerSync.durationMs = durMs;
+    adminTimerSync.remainingMsPaused = remMs;
+    adminTimerSync.endsAtPerf = performance.now() + remMs;
+
+    applyAdminTimerDom(remMs, durMs, adminTimerSync.isPaused);
+    stopAdminTimerLoop();
+    if (adminTimerSync.active && !adminTimerSync.isPaused && remMs > 0) {
+      adminTimerSync.rafId = requestAnimationFrame(adminTimerFrame);
+    }
   }
 
   function renderRoundSelect(state) {
@@ -549,6 +602,7 @@
 
     const round = state.currentRound;
     if (!round) {
+      stopAdminTimerLoop();
       els.roundPanel.classList.add('hidden');
       els.evalPanel.classList.add('hidden');
     } else {
@@ -561,7 +615,13 @@
       els.roundTitle.textContent = `${t('round_prefix')} ${round.roundNumber}: ${locTitle}`;
       els.questionText.textContent = locQuestion;
       els.referenceAnswer.textContent = locRef;
-      renderAdminTimer(round.remainingSeconds, round.durationSeconds, round.isPaused);
+      syncAdminTimer({
+        remainingMs: round.remainingMs,
+        remainingSeconds: round.remainingSeconds,
+        durationSeconds: round.durationSeconds,
+        isPaused: round.isPaused,
+        isActive: state.status === 'ROUND_ACTIVE'
+      });
 
       const isActive = state.status === 'ROUND_ACTIVE';
       const isLocked = state.status === 'ROUND_LOCKED';
@@ -618,7 +678,13 @@
 
     socket.on('game:timer', (tick) => {
       if (adminState && adminState.status === 'ROUND_ACTIVE') {
-        renderAdminTimer(tick.remainingSeconds, tick.durationSeconds, tick.isPaused);
+        syncAdminTimer({
+          remainingMs: tick.remainingMs,
+          remainingSeconds: tick.remainingSeconds,
+          durationSeconds: tick.durationSeconds,
+          isPaused: tick.isPaused,
+          isActive: true
+        });
       }
     });
 

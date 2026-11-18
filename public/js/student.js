@@ -2,6 +2,7 @@
   const STORAGE_ID_KEY = 'qwen_quiz_player_id';
   const STORAGE_TOKEN_KEY = 'qwen_quiz_player_token';
   const STORAGE_NAME_KEY = 'qwen_quiz_player_name';
+  const SPECTATOR_KEY = 'qwen_quiz_spectator';
   const { t, pickLocalized, initLangSwitcher } = window.QuizI18n;
 
   const socket = io({
@@ -10,13 +11,30 @@
     reconnectionDelay: 1000
   });
 
+  const urlParams = new URLSearchParams(window.location.search);
+  let isSpectator =
+    urlParams.get('spectator') === '1' || sessionStorage.getItem(SPECTATOR_KEY) === '1';
+  if (urlParams.get('spectator') === '1') {
+    sessionStorage.setItem(SPECTATOR_KEY, '1');
+  }
+
   let currentState = null;
   let isConnected = false;
   let selectedEmoji = '🚀';
   let lastRoundKey = null;
   let captainDirty = false;
 
+  const timerSync = {
+    active: false,
+    isPaused: false,
+    durationMs: 60000,
+    remainingMsPaused: 0,
+    endsAtPerf: 0,
+    rafId: null
+  };
+
   const els = {
+    mainContainer: document.getElementById('main-container'),
     quizTitle: document.getElementById('quiz-title'),
     connectionStatus: document.getElementById('connection-status'),
     playerMeta: document.getElementById('player-meta'),
@@ -26,8 +44,26 @@
       lobby: document.getElementById('screen-lobby'),
       round: document.getElementById('screen-round'),
       results: document.getElementById('screen-results'),
-      finished: document.getElementById('screen-finished')
+      finished: document.getElementById('screen-finished'),
+      spectator: document.getElementById('screen-spectator')
     },
+    enterSpectatorBtn: document.getElementById('enter-spectator-btn'),
+    spectatorPhaseTitle: document.getElementById('spectator-phase-title'),
+    spectatorPhasePill: document.getElementById('spectator-phase-pill'),
+    spectatorTimerWrap: document.getElementById('spectator-timer-wrap'),
+    spectatorTimerLabel: document.getElementById('spectator-timer-label'),
+    spectatorTimerValue: document.getElementById('spectator-timer-value'),
+    spectatorTimerBar: document.getElementById('spectator-timer-bar'),
+    spectatorStatusBox: document.getElementById('spectator-status-box'),
+    spectatorResultsCard: document.getElementById('spectator-results-card'),
+    spectatorResultsTitle: document.getElementById('spectator-results-title'),
+    spectatorJudgeBadge: document.getElementById('spectator-judge-badge'),
+    spectatorResultsSummary: document.getElementById('spectator-results-summary'),
+    spectatorResultsEvaluations: document.getElementById('spectator-results-evaluations'),
+    spectatorTeamsHeading: document.getElementById('spectator-teams-heading'),
+    spectatorAnsweredPill: document.getElementById('spectator-answered-pill'),
+    spectatorTeamsList: document.getElementById('spectator-teams-list'),
+    spectatorLeaderboard: document.getElementById('spectator-leaderboard'),
     loginForm: document.getElementById('login-form'),
     playerNameInput: document.getElementById('player-name-input'),
     createTeamForm: document.getElementById('create-team-form'),
@@ -110,26 +146,97 @@
     }
   }
 
-  function renderTimer(remainingSeconds, durationSeconds, isPaused) {
-    const total = Math.max(1, Number(durationSeconds) || 60);
-    const rem = Math.max(0, Number(remainingSeconds) || 0);
-    const pct = Math.max(0, Math.min(100, (rem / total) * 100));
+  function applyTimerDom(remMs, durationMs, isPaused) {
+    const total = Math.max(1000, Number(durationMs) || 60000);
+    const clampedMs = Math.max(0, Number(remMs) || 0);
+    const pct = Math.max(0, Math.min(100, (clampedMs / total) * 100));
+    const remSec = Math.ceil(clampedMs / 1000);
+    const timeText = isPaused
+      ? `${formatTime(remSec)} ${t('paused_suffix')}`
+      : formatTime(remSec);
+    const labelText = isPaused ? t('timer_paused_label') : t('time_left');
+    const isUrgent = !isPaused && clampedMs > 0 && clampedMs <= 15000;
 
-    els.roundTimerValue.textContent = isPaused
-      ? `${formatTime(rem)} ${t('paused_suffix')}`
-      : formatTime(rem);
-    els.roundTimerLabel.textContent = isPaused ? t('timer_paused_label') : t('time_left');
-    els.roundTimerBar.style.width = `${pct}%`;
-
-    const isUrgent = !isPaused && rem > 0 && rem <= 15;
+    els.roundTimerValue.textContent = timeText;
+    els.roundTimerLabel.textContent = labelText;
+    els.roundTimerBar.style.width = `${pct.toFixed(3)}%`;
     els.roundTimerValue.classList.toggle('urgent', isUrgent);
     els.roundTimerBar.classList.toggle('urgent', isUrgent);
+
+    els.spectatorTimerValue.textContent = timeText;
+    els.spectatorTimerLabel.textContent = labelText;
+    els.spectatorTimerBar.style.width = `${pct.toFixed(3)}%`;
+    els.spectatorTimerValue.classList.toggle('urgent', isUrgent);
+    els.spectatorTimerBar.classList.toggle('urgent', isUrgent);
+  }
+
+  function stopTimerLoop() {
+    if (timerSync.rafId !== null) {
+      cancelAnimationFrame(timerSync.rafId);
+      timerSync.rafId = null;
+    }
+  }
+
+  function timerFrame() {
+    if (!timerSync.active || timerSync.isPaused) {
+      timerSync.rafId = null;
+      return;
+    }
+    const remMs = Math.max(0, timerSync.endsAtPerf - performance.now());
+    applyTimerDom(remMs, timerSync.durationMs, false);
+    if (remMs > 0) {
+      timerSync.rafId = requestAnimationFrame(timerFrame);
+    } else {
+      timerSync.rafId = null;
+    }
+  }
+
+  function syncTimerFromPayload({ remainingMs, remainingSeconds, durationSeconds, isPaused, isActive }) {
+    const durMs = Math.max(1000, (Number(durationSeconds) || 60) * 1000);
+    const remMs =
+      typeof remainingMs === 'number'
+        ? Math.max(0, remainingMs)
+        : Math.max(0, (Number(remainingSeconds) || 0) * 1000);
+
+    timerSync.active = Boolean(isActive);
+    timerSync.isPaused = Boolean(isPaused);
+    timerSync.durationMs = durMs;
+    timerSync.remainingMsPaused = remMs;
+    timerSync.endsAtPerf = performance.now() + remMs;
+
+    applyTimerDom(remMs, durMs, timerSync.isPaused);
+    stopTimerLoop();
+    if (timerSync.active && !timerSync.isPaused && remMs > 0) {
+      timerSync.rafId = requestAnimationFrame(timerFrame);
+    }
   }
 
   function renderTopBar(state) {
     document.title = t('page_title_student');
     els.quizTitle.textContent = pickLocalized(state.quizTitle, state.quizTitleKk) || t('default_quiz_title');
     updateConnectionLabel();
+    els.mainContainer.classList.toggle('container-spectator', isSpectator);
+
+    if (isSpectator) {
+      els.playerMeta.innerHTML = `
+        <span class="pill pill-primary">${escapeHtml(t('spectator_badge'))}</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="become-player-btn">${escapeHtml(t('become_player_btn'))}</button>
+      `;
+      const becomeBtn = document.getElementById('become-player-btn');
+      if (becomeBtn) {
+        becomeBtn.addEventListener('click', () => {
+          isSpectator = false;
+          sessionStorage.removeItem(SPECTATOR_KEY);
+          if (window.location.search.includes('spectator=1')) {
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+          socket.emit('student:set_spectator', { enabled: false }, (res) => {
+            if (res?.state) render(res.state);
+          });
+        });
+      }
+      return;
+    }
 
     if (!state.player) {
       els.playerMeta.innerHTML = '';
@@ -298,7 +405,13 @@
     els.roundTeamPill.textContent = `${team.emoji} ${team.name}`;
     els.roundQuestionText.textContent = locQuestion;
 
-    renderTimer(round.remainingSeconds, round.durationSeconds, round.isPaused);
+    syncTimerFromPayload({
+      remainingMs: round.remainingMs,
+      remainingSeconds: round.remainingSeconds,
+      durationSeconds: round.durationSeconds,
+      isPaused: round.isPaused,
+      isActive: state.status === 'ROUND_ACTIVE'
+    });
 
     const isActive = state.status === 'ROUND_ACTIVE';
     const isLocked = state.status === 'ROUND_LOCKED';
@@ -499,16 +612,156 @@
       .join('');
   }
 
+  function renderSpectatorScreen(state) {
+    const round = state.currentRound;
+    const teams = state.teams || [];
+    const status = state.status;
+
+    els.spectatorPhasePill.textContent = t(`phase_${status}`);
+
+    if (status === 'LOBBY') {
+      els.spectatorPhaseTitle.textContent = t('spectator_lobby_title');
+      els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorStatusBox.classList.remove('hidden');
+      els.spectatorStatusBox.textContent = t('spectator_lobby_hint');
+      els.spectatorResultsCard.classList.add('hidden');
+      stopTimerLoop();
+    } else if (status === 'ROUND_ACTIVE' || status === 'ROUND_LOCKED' || status === 'JUDGING') {
+      els.spectatorPhaseTitle.textContent = round
+        ? `${t('round_prefix')} ${round.roundNumber} / ${round.totalQuestions}`
+        : t(`phase_${status}`);
+      els.spectatorTimerWrap.classList.remove('hidden');
+      els.spectatorStatusBox.classList.remove('hidden');
+      els.spectatorResultsCard.classList.add('hidden');
+
+      if (round) {
+        syncTimerFromPayload({
+          remainingMs: round.remainingMs,
+          remainingSeconds: round.remainingSeconds,
+          durationSeconds: round.durationSeconds,
+          isPaused: round.isPaused,
+          isActive: status === 'ROUND_ACTIVE'
+        });
+      }
+
+      if (status === 'ROUND_ACTIVE') {
+        els.spectatorStatusBox.textContent = t('spectator_round_hidden_msg');
+      } else if (status === 'ROUND_LOCKED') {
+        els.spectatorStatusBox.textContent = t('spectator_locked_msg');
+      } else {
+        els.spectatorStatusBox.innerHTML = `<div style="display:flex; align-items:center; justify-content:center; gap:12px;"><span class="spinner"></span><span>${escapeHtml(t('spectator_judging_msg'))}</span></div>`;
+      }
+    } else if (status === 'ROUND_RESULTS' && round && state.roundResults) {
+      stopTimerLoop();
+      els.spectatorPhaseTitle.textContent = t('results_title', {
+        num: round.roundNumber,
+        title: pickLocalized(round.title, round.titleKk)
+      });
+      els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorStatusBox.classList.add('hidden');
+      els.spectatorResultsCard.classList.remove('hidden');
+
+      const res = state.roundResults;
+      els.spectatorResultsTitle.textContent = t('results_title', {
+        num: round.roundNumber,
+        title: pickLocalized(round.title, round.titleKk)
+      });
+      els.spectatorJudgeBadge.textContent =
+        res.judgeSource === 'qwen'
+          ? t('judge_qwen', { model: res.modelUsed || 'Qwen AI' })
+          : res.judgeSource === 'manual'
+            ? t('judge_manual')
+            : t('judge_fallback');
+      els.spectatorResultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
+      els.spectatorResultsEvaluations.innerHTML = res.evaluations
+        .map(
+          (ev) => `
+            <div class="eval-card ${ev.isWinner ? 'winner' : ''}">
+              <div class="eval-head">
+                <div style="font-weight:700;">
+                  ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.teamName)}
+                </div>
+                <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
+              </div>
+              <div style="margin-bottom:4px; font-size:0.93rem;">
+                <span class="muted">${escapeHtml(t('answer_label'))}</span>
+                ${ev.answer ? `<strong>${escapeHtml(ev.answer)}</strong>` : `<span class="muted">${escapeHtml(t('no_answer_label'))}</span>`}
+              </div>
+              <div class="muted" style="font-size:0.9rem;">💬 ${escapeHtml(ev.comment)}</div>
+            </div>
+          `
+        )
+        .join('');
+    } else if (status === 'FINISHED') {
+      stopTimerLoop();
+      els.spectatorPhaseTitle.textContent = t('quiz_finished_heading');
+      els.spectatorTimerWrap.classList.add('hidden');
+      els.spectatorStatusBox.classList.add('hidden');
+      els.spectatorResultsCard.classList.add('hidden');
+    }
+
+    const isRoundStatus =
+      status === 'ROUND_ACTIVE' || status === 'ROUND_LOCKED' || status === 'JUDGING';
+    const submittedCount = teams.filter((tm) => tm.hasSubmitted).length;
+
+    els.spectatorTeamsHeading.textContent = isRoundStatus
+      ? t('spectator_team_status_title')
+      : t('all_teams_lobby');
+    els.spectatorAnsweredPill.textContent = isRoundStatus
+      ? t('answered_summary', { submitted: submittedCount, total: teams.length })
+      : t('teams_count', { n: teams.length });
+
+    if (!teams.length) {
+      els.spectatorTeamsList.innerHTML = `<div class="muted">${escapeHtml(t('no_teams_yet'))}</div>`;
+    } else {
+      els.spectatorTeamsList.innerHTML = teams
+        .map((team) => {
+          const memberNames = team.members
+            .map(
+              (m) =>
+                `${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}${m.isOnline ? '' : ` ${escapeHtml(t('offline_tag'))}`}`
+            )
+            .join(', ');
+          const badge = isRoundStatus
+            ? `<span class="pill ${team.hasSubmitted ? 'pill-success' : 'pill-warning'}">${escapeHtml(team.hasSubmitted ? t('status_answered') : t('status_thinking'))}</span>`
+            : `<span class="pill">${team.memberCount} ${escapeHtml(t('members_short'))} · ${team.totalScore} ${escapeHtml(t('pts_short'))}</span>`;
+          return `
+            <div class="team-item">
+              <div class="team-item-left">
+                <div class="team-emoji">${escapeHtml(team.emoji)}</div>
+                <div>
+                  <div class="team-name">${escapeHtml(team.name)}</div>
+                  <div class="muted" style="font-size:0.82rem;">${memberNames || escapeHtml(t('nobody_yet'))}</div>
+                </div>
+              </div>
+              <div>${badge}</div>
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    renderLeaderboard(els.spectatorLeaderboard, state.leaderboard, null);
+  }
+
   function render(state) {
     currentState = state;
     renderTopBar(state);
 
+    if (isSpectator) {
+      showOnlyScreen('spectator');
+      renderSpectatorScreen(state);
+      return;
+    }
+
     if (!state.player) {
+      stopTimerLoop();
       showOnlyScreen('login');
       return;
     }
 
     if (!state.myTeam) {
+      stopTimerLoop();
       showOnlyScreen('teamSelect');
       renderEmojiPicker(state.availableEmojis);
       els.teamsCountPill.textContent = t('teams_count', { n: state.teams.length });
@@ -517,6 +770,7 @@
     }
 
     if (state.status === 'LOBBY') {
+      stopTimerLoop();
       showOnlyScreen('lobby');
       renderMyTeamLobby(state);
       els.lobbyTeamsCount.textContent = t('teams_count', { n: state.teams.length });
@@ -538,12 +792,14 @@
     }
 
     if (state.status === 'ROUND_RESULTS') {
+      stopTimerLoop();
       showOnlyScreen('results');
       renderResultsScreen(state);
       return;
     }
 
     if (state.status === 'FINISHED') {
+      stopTimerLoop();
       showOnlyScreen('finished');
       renderFinishedScreen(state);
     }
@@ -561,6 +817,14 @@
   // ========================
   // Event Handlers
   // ========================
+
+  els.enterSpectatorBtn.addEventListener('click', () => {
+    isSpectator = true;
+    sessionStorage.setItem(SPECTATOR_KEY, '1');
+    socket.emit('student:set_spectator', { enabled: true }, (res) => {
+      if (res?.state) render(res.state);
+    });
+  });
 
   els.loginForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -659,6 +923,12 @@
   socket.on('connect', () => {
     isConnected = true;
     updateConnectionLabel();
+    if (isSpectator) {
+      socket.emit('student:set_spectator', { enabled: true }, (res) => {
+        if (res?.state) render(res.state);
+      });
+      return;
+    }
     const savedId = localStorage.getItem(STORAGE_ID_KEY);
     const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY);
     const savedName = localStorage.getItem(STORAGE_NAME_KEY);
@@ -691,7 +961,13 @@
 
   socket.on('game:timer', (tick) => {
     if (currentState && currentState.status === 'ROUND_ACTIVE') {
-      renderTimer(tick.remainingSeconds, tick.durationSeconds, tick.isPaused);
+      syncTimerFromPayload({
+        remainingMs: tick.remainingMs,
+        remainingSeconds: tick.remainingSeconds,
+        durationSeconds: tick.durationSeconds,
+        isPaused: tick.isPaused,
+        isActive: true
+      });
     }
   });
 

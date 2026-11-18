@@ -538,11 +538,15 @@ class QuizGameManager {
     }
   }
 
-  getRemainingSeconds(round) {
+  getRemainingMs(round) {
     if (!round) return 0;
     if (this.status !== GAME_STATUS.ROUND_ACTIVE) return 0;
-    if (round.isPaused) return Math.max(0, Math.ceil(round.remainingOnPause));
-    return Math.max(0, Math.ceil((round.endsAt - Date.now()) / 1000));
+    if (round.isPaused) return Math.max(0, Math.round(round.remainingOnPause * 1000));
+    return Math.max(0, round.endsAt - Date.now());
+  }
+
+  getRemainingSeconds(round) {
+    return Math.ceil(this.getRemainingMs(round) / 1000);
   }
 
   togglePauseRound() {
@@ -870,7 +874,7 @@ class QuizGameManager {
       });
   }
 
-  buildStudentStateForPlayer(playerId) {
+  buildStudentStateForPlayer(playerId, { isSpectator = false } = {}) {
     const player = playerId ? this.players.get(playerId) : null;
     const round = this.getCurrentRound();
     const myTeam = player?.teamId ? this.teams.get(player.teamId) : null;
@@ -879,16 +883,18 @@ class QuizGameManager {
     if (round) {
       const showAnswer =
         this.status === GAME_STATUS.ROUND_RESULTS || this.status === GAME_STATUS.FINISHED;
+      const hideQuestionForSpectator = isSpectator && !showAnswer;
       publicRound = {
         roundNumber: round.roundNumber,
         totalQuestions: this.questions.length,
-        title: round.title,
-        titleKk: round.titleKk || '',
-        question: round.question,
-        questionKk: round.questionKk || '',
+        title: hideQuestionForSpectator ? '' : round.title,
+        titleKk: hideQuestionForSpectator ? '' : (round.titleKk || ''),
+        question: hideQuestionForSpectator ? '' : round.question,
+        questionKk: hideQuestionForSpectator ? '' : (round.questionKk || ''),
         timeLimit: round.timeLimit,
         durationSeconds: round.durationSeconds,
         remainingSeconds: this.getRemainingSeconds(round),
+        remainingMs: this.getRemainingMs(round),
         isPaused: round.isPaused,
         referenceAnswer: showAnswer ? round.referenceAnswer : null,
         referenceAnswerKk: showAnswer ? (round.referenceAnswerKk || '') : null
@@ -1030,6 +1036,7 @@ class QuizGameManager {
         timeLimit: round.timeLimit,
         durationSeconds: round.durationSeconds,
         remainingSeconds: this.getRemainingSeconds(round),
+        remainingMs: this.getRemainingMs(round),
         isPaused: round.isPaused,
         submittedCount: round.submissions.size,
         totalTeams: this.teams.size,
