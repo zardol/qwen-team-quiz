@@ -563,7 +563,7 @@
     settingsInitialized = true;
 
     els.settingQuizTitle.value = settings.quizTitle || '';
-    els.settingDefaultTime.value = settings.defaultTimeLimit || 60;
+    els.settingDefaultTime.value = settings.defaultTimeLimit || 30;
     els.settingQwenUrl.value = settings.qwenBaseUrl || '';
     els.settingQwenModel.value = settings.qwenModel || 'qwen-plus';
 
@@ -640,7 +640,7 @@
   function resetQuestionForm() {
     els.qEditId.value = '';
     els.questionForm.reset();
-    els.qTimeInput.value = adminState?.settings?.defaultTimeLimit || 60;
+    els.qTimeInput.value = adminState?.settings?.defaultTimeLimit || 30;
     els.questionFormTitle.textContent = 'Добавить новый вопрос';
     els.saveQuestionBtn.textContent = '➕ Добавить вопрос';
     els.cancelEditQuestionBtn.classList.add('hidden');
@@ -881,7 +881,7 @@
       question: els.qTextInput.value.trim(),
       referenceAnswer: els.qRefInput.value.trim(),
       criteria: els.qCriteriaInput.value.trim(),
-      timeLimit: Number(els.qTimeInput.value) || 60
+      timeLimit: Number(els.qTimeInput.value) || 30
     };
 
     try {
@@ -918,7 +918,7 @@
     e.preventDefault();
     const payload = {
       quizTitle: els.settingQuizTitle.value.trim(),
-      defaultTimeLimit: Number(els.settingDefaultTime.value) || 60,
+      defaultTimeLimit: Number(els.settingDefaultTime.value) || 30,
       qwenBaseUrl: els.settingQwenUrl.value.trim(),
       qwenModel: els.settingQwenModel.value.trim()
     };

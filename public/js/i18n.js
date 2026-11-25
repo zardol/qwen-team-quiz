@@ -95,6 +95,8 @@
       toast_send_err: 'Не удалось отправить ответ',
       toast_answer_sent: 'Ваш ответ отправлен!',
       toast_kicked: 'Ведущий удалил вас из текущей сессии.',
+      toast_copy_blocked: 'Копирование вопроса запрещено',
+      toast_paste_blocked: 'Вставка текста в ответ запрещена',
 
       // Admin UI
       admin_title: 'Панель администратора',
@@ -229,6 +231,8 @@
       toast_send_err: 'Жауапты жіберу мүмкін болмады',
       toast_answer_sent: 'Жауабыңыз жіберілді!',
       toast_kicked: 'Жүргізуші сізді ағымдағы сессиядан шығарды.',
+      toast_copy_blocked: 'Сұрақты көшіруге тыйым салынған',
+      toast_paste_blocked: 'Жауапқа мәтін қоюға тыйым салынған',
 
       // Admin UI
       admin_title: 'Әкімші панелі',

@@ -89,21 +89,21 @@
     <section id="screen-round" class="hidden">
       <div class="card card-highlight">
         <div class="card-title">
-          <span id="round-heading">Раунд 1</span>
+          <span id="round-heading" class="no-copy">Раунд 1</span>
           <span class="pill pill-primary" id="round-player-pill"></span>
         </div>
 
         <div class="timer-wrap" id="round-timer-wrap">
           <div class="timer-head">
             <span id="round-timer-label" data-i18n="time_left">Осталось времени</span>
-            <span class="timer-value" id="round-timer-value">01:00</span>
+            <span class="timer-value" id="round-timer-value">00:30</span>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="round-timer-bar" style="width: 100%"></div>
           </div>
         </div>
 
-        <div class="question-box" id="round-question-text"></div>
+        <div class="question-box no-copy" id="round-question-text"></div>
 
         <!-- Статус закрытия / судейства -->
         <div id="round-status-banner" class="alert alert-warning hidden"></div>
@@ -118,6 +118,7 @@
                 id="player-answer-input"
                 data-i18n-placeholder="player_answer_placeholder"
                 placeholder="Напишите ваш ответ здесь..."
+                autocomplete="off"
                 maxlength="800"
                 rows="3"
               ></textarea>
@@ -183,14 +184,14 @@
         <div class="timer-wrap hidden" id="spectator-timer-wrap">
           <div class="timer-head">
             <span id="spectator-timer-label" data-i18n="time_left">Осталось времени</span>
-            <span class="spectator-timer-value" id="spectator-timer-value">01:00</span>
+            <span class="spectator-timer-value" id="spectator-timer-value">00:30</span>
           </div>
           <div class="progress-track" style="height: 14px;">
             <div class="progress-fill" id="spectator-timer-bar" style="width: 100%"></div>
           </div>
         </div>
 
-        <div class="question-box hidden" id="spectator-question-box"></div>
+        <div class="question-box no-copy hidden" id="spectator-question-box"></div>
         <div class="spectator-hidden-q hidden" id="spectator-status-box"></div>
       </div>
 

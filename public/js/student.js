@@ -35,11 +35,16 @@
   let awayStartedAt = null;
   let leaveDebounceTimer = null;
   let hasReportedLeave = false;
+  let leaveAcked = false;
+  let activeLeaveRoundNumber = null;
+  let awayEventSeq = 0;
+  let lastAntiCheatToastAt = 0;
+  const pendingAwayEvents = [];
 
   const timerSync = {
     active: false,
     isPaused: false,
-    durationMs: 60000,
+    durationMs: 30000,
     remainingMsPaused: 0,
     endsAtPerf: 0,
     rafId: null
@@ -214,8 +219,19 @@
   }
 
   // ========================
-  // Anti-cheat Tab Tracking
+  // Anti-cheat Tab Tracking & Copy Protection
   // ========================
+
+  function notifyAntiCheatBlocked(message) {
+    const now = Date.now();
+    if (now - lastAntiCheatToastAt < 450) return;
+    lastAntiCheatToastAt = now;
+    showToast(message, 'error');
+  }
+
+  function getActiveRoundNumber() {
+    return currentState?.currentRound?.roundNumber ?? null;
+  }
 
   function isAntiCheatArmed() {
     return (
@@ -226,25 +242,99 @@
     );
   }
 
-  function resetAntiCheatTracking() {
+  function flushPendingAwayEvents() {
+    if (!isConnected || mode !== 'player' || !currentState?.player || !pendingAwayEvents.length) {
+      return;
+    }
+    const activeRoundNumber = getActiveRoundNumber();
+    const validStatus =
+      currentState.status === 'ROUND_ACTIVE' || currentState.status === 'ROUND_LOCKED';
+
+    for (let i = pendingAwayEvents.length - 1; i >= 0; i -= 1) {
+      const evt = pendingAwayEvents[i];
+      if (!validStatus || (activeRoundNumber != null && evt.roundNumber !== activeRoundNumber)) {
+        pendingAwayEvents.splice(i, 1);
+        continue;
+      }
+      if (evt.sending) continue;
+      evt.sending = true;
+      socket.emit(
+        'student:tab_away_completed',
+        {
+          eventId: evt.eventId,
+          roundNumber: evt.roundNumber,
+          awayMs: evt.awayMs
+        },
+        (res) => {
+          if (res?.retryable) {
+            evt.sending = false;
+            return;
+          }
+          const idx = pendingAwayEvents.indexOf(evt);
+          if (idx !== -1) {
+            pendingAwayEvents.splice(idx, 1);
+          }
+        }
+      );
+    }
+  }
+
+  let activeLeaveEventId = null;
+
+  function resetAntiCheatTracking({ clearPending = true } = {}) {
     if (leaveDebounceTimer) {
       clearTimeout(leaveDebounceTimer);
       leaveDebounceTimer = null;
     }
     awayStartedAt = null;
     hasReportedLeave = false;
+    leaveAcked = false;
+    activeLeaveRoundNumber = null;
+    activeLeaveEventId = null;
+    if (clearPending) {
+      pendingAwayEvents.length = 0;
+    }
   }
 
-  function handleWindowLeave() {
-    if (!isAntiCheatArmed() || awayStartedAt !== null) return;
-    awayStartedAt = Date.now();
+  function emitTabLeaveNow() {
+    if (!isAntiCheatArmed() || hasReportedLeave) return;
+    hasReportedLeave = true;
+    leaveAcked = false;
+    activeLeaveRoundNumber = getActiveRoundNumber();
+    if (!activeLeaveEventId) {
+      activeLeaveEventId = `away-${Date.now()}-${++awayEventSeq}`;
+    }
+    if (isConnected) {
+      socket.emit('student:tab_leave', { eventId: activeLeaveEventId }, (res) => {
+        if (res?.ok) {
+          leaveAcked = true;
+        }
+      });
+    }
+  }
+
+  function handleWindowLeave(immediate = false) {
+    if (!isAntiCheatArmed()) return;
+    if (awayStartedAt === null) {
+      awayStartedAt = Date.now();
+      activeLeaveRoundNumber = getActiveRoundNumber();
+      activeLeaveEventId = `away-${Date.now()}-${++awayEventSeq}`;
+    }
+    if (immediate) {
+      if (leaveDebounceTimer) {
+        clearTimeout(leaveDebounceTimer);
+        leaveDebounceTimer = null;
+      }
+      emitTabLeaveNow();
+      return;
+    }
+    if (hasReportedLeave || leaveDebounceTimer) return;
     leaveDebounceTimer = setTimeout(() => {
       leaveDebounceTimer = null;
-      if (awayStartedAt !== null && isAntiCheatArmed() && !hasReportedLeave) {
-        hasReportedLeave = true;
-        socket.emit('student:tab_leave');
+      if (awayStartedAt !== null && isAntiCheatArmed()) {
+        emitTabLeaveNow();
       }
-    }, 1500);
+    }, 1200);
   }
 
   function handleWindowReturn() {
@@ -253,25 +343,58 @@
       clearTimeout(leaveDebounceTimer);
       leaveDebounceTimer = null;
     }
-    const elapsed = Date.now() - awayStartedAt;
+    const elapsed = Math.max(0, Date.now() - awayStartedAt);
+    const leftRoundNumber = activeLeaveRoundNumber;
+    const leftEventId = activeLeaveEventId;
+    const wasReported = hasReportedLeave;
+    const wasAcked = leaveAcked;
+
     awayStartedAt = null;
-    if (hasReportedLeave) {
-      hasReportedLeave = false;
-      if (isAntiCheatArmed()) {
-        socket.emit('student:tab_return', { awayMs: elapsed });
+    hasReportedLeave = false;
+    leaveAcked = false;
+    activeLeaveRoundNumber = null;
+    activeLeaveEventId = null;
+
+    if (!wasReported) return;
+
+    const currentRoundNumber = getActiveRoundNumber();
+    const canSendReturnNow =
+      wasAcked &&
+      isConnected &&
+      mode === 'player' &&
+      currentState?.player &&
+      (currentState.status === 'ROUND_ACTIVE' || currentState.status === 'ROUND_LOCKED') &&
+      leftRoundNumber === currentRoundNumber;
+
+    if (canSendReturnNow) {
+      socket.emit('student:tab_return', { awayMs: elapsed });
+      return;
+    }
+
+    if (leftRoundNumber != null && elapsed > 0) {
+      pendingAwayEvents.push({
+        eventId: leftEventId || `away-${Date.now()}-${++awayEventSeq}`,
+        roundNumber: leftRoundNumber,
+        awayMs: elapsed,
+        sending: false
+      });
+      if (isConnected) {
+        flushPendingAwayEvents();
       }
     }
   }
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      handleWindowLeave();
+      handleWindowLeave(true);
     } else {
       handleWindowReturn();
     }
   });
 
-  window.addEventListener('blur', handleWindowLeave);
+  window.addEventListener('pagehide', () => handleWindowLeave(true));
+  window.addEventListener('pageshow', handleWindowReturn);
+  window.addEventListener('blur', () => handleWindowLeave(false));
   window.addEventListener('focus', handleWindowReturn);
 
   // ========================
@@ -428,7 +551,9 @@
     const isLocked = state.status === 'ROUND_LOCKED';
     const isJudging = state.status === 'JUDGING';
 
-    if (!isActive) {
+    if (isLocked) {
+      resetAntiCheatTracking({ clearPending: false });
+    } else if (!isActive) {
       resetAntiCheatTracking();
     }
 
@@ -833,6 +958,50 @@
     answerDirty = true;
   });
 
+  ['paste', 'drop'].forEach((evtName) => {
+    els.playerAnswerInput.addEventListener(evtName, (e) => {
+      e.preventDefault();
+      notifyAntiCheatBlocked(t('toast_paste_blocked'));
+    });
+  });
+
+  els.playerAnswerInput.addEventListener('beforeinput', (e) => {
+    if (
+      e.inputType === 'insertFromPaste' ||
+      e.inputType === 'insertFromPasteAsQuotation' ||
+      e.inputType === 'insertFromDrop' ||
+      e.inputType === 'insertFromYank'
+    ) {
+      e.preventDefault();
+      notifyAntiCheatBlocked(t('toast_paste_blocked'));
+    }
+  });
+
+  [els.roundHeading, els.roundQuestionText, els.spectatorQuestionBox]
+    .filter(Boolean)
+    .forEach((el) => {
+      ['copy', 'cut', 'contextmenu'].forEach((evtName) => {
+        el.addEventListener(evtName, (e) => {
+          e.preventDefault();
+          notifyAntiCheatBlocked(t('toast_copy_blocked'));
+        });
+      });
+      ['selectstart', 'dragstart'].forEach((evtName) => {
+        el.addEventListener(evtName, (e) => {
+          e.preventDefault();
+        });
+      });
+    });
+
+  ['copy', 'cut'].forEach((evtName) => {
+    document.addEventListener(evtName, (e) => {
+      if (e.target?.closest?.('.no-copy')) {
+        e.preventDefault();
+        notifyAntiCheatBlocked(t('toast_copy_blocked'));
+      }
+    });
+  });
+
   els.playerAnswerForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = els.playerAnswerInput.value.trim();
@@ -878,7 +1047,11 @@
             if (res.playerToken) {
               localStorage.setItem(STORAGE_TOKEN_KEY, res.playerToken);
             }
+            for (const evt of pendingAwayEvents) {
+              evt.sending = false;
+            }
             render(res.state);
+            flushPendingAwayEvents();
           }
         }
       );

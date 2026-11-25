@@ -43,7 +43,7 @@ class QuizGameManager {
       quizTitleKk: 'Философия бойынша интерактивті квиз',
       qwenBaseUrl: process.env.QWEN_BASE_URL || DEFAULT_QWEN_BASE_URL,
       qwenModel: process.env.QWEN_MODEL || DEFAULT_QWEN_MODEL,
-      defaultTimeLimit: 60
+      defaultTimeLimit: 30
     };
     this.runtimeApiKey = (process.env.QWEN_API_KEY || '').trim();
 
@@ -76,7 +76,7 @@ class QuizGameManager {
             quizTitleKk: parsed.settings.quizTitleKk || this.settings.quizTitleKk,
             qwenBaseUrl: process.env.QWEN_BASE_URL || parsed.settings.qwenBaseUrl || DEFAULT_QWEN_BASE_URL,
             qwenModel: process.env.QWEN_MODEL || parsed.settings.qwenModel || DEFAULT_QWEN_MODEL,
-            defaultTimeLimit: Number(parsed.settings.defaultTimeLimit) || 60
+            defaultTimeLimit: Number(parsed.settings.defaultTimeLimit) || 30
           };
         }
         if (Array.isArray(parsed.questions)) {
@@ -114,7 +114,7 @@ class QuizGameManager {
       referenceAnswer: String(q.referenceAnswer || '').trim(),
       referenceAnswerKk: String(q.referenceAnswerKk || '').trim(),
       criteria: String(q.criteria || '').trim(),
-      timeLimit: Math.max(15, Math.min(600, Number(q.timeLimit) || this.settings.defaultTimeLimit || 60))
+      timeLimit: Math.max(15, Math.min(600, Number(q.timeLimit) || this.settings.defaultTimeLimit || 30))
     };
   }
 
@@ -361,7 +361,7 @@ class QuizGameManager {
     this.stopTimer();
     const q = this.questions[idx];
     const now = Date.now();
-    const duration = q.timeLimit || this.settings.defaultTimeLimit || 60;
+    const duration = q.timeLimit || this.settings.defaultTimeLimit || 30;
 
     const existing = this.roundRecords.get(idx);
     const record = {
@@ -531,7 +531,7 @@ class QuizGameManager {
     return submission;
   }
 
-  recordTabLeave(playerId) {
+  recordTabLeave(playerId, eventId = null) {
     if (this.status !== GAME_STATUS.ROUND_ACTIVE) return false;
     const player = this.players.get(playerId);
     const round = this.getCurrentRound();
@@ -548,6 +548,13 @@ class QuizGameManager {
       return false;
     }
 
+    if (eventId) {
+      if (!round.processedLeaveEventIds) {
+        round.processedLeaveEventIds = new Set();
+      }
+      round.processedLeaveEventIds.add(eventId);
+    }
+
     entry.count += 1;
     entry.isCurrentlyAway = true;
     entry.lastLeftAt = Date.now();
@@ -556,8 +563,11 @@ class QuizGameManager {
     return true;
   }
 
-  recordTabReturn(playerId, awayMs) {
-    if (this.status !== GAME_STATUS.ROUND_ACTIVE) return false;
+  recordTabReturn(playerId, awayMs, { allowLocked = false } = {}) {
+    const validStatus =
+      this.status === GAME_STATUS.ROUND_ACTIVE ||
+      (allowLocked && this.status === GAME_STATUS.ROUND_LOCKED);
+    if (!validStatus) return false;
     const round = this.getCurrentRound();
     if (!round) return false;
 
@@ -576,6 +586,60 @@ class QuizGameManager {
     entry.isCurrentlyAway = false;
     entry.lastLeftAt = null;
     round.tabLeaves.set(playerId, entry);
+    return true;
+  }
+
+  recordTabAwayCompleted(playerId, { roundNumber, awayMs, eventId } = {}) {
+    if (
+      this.status !== GAME_STATUS.ROUND_ACTIVE &&
+      this.status !== GAME_STATUS.ROUND_LOCKED
+    ) {
+      return false;
+    }
+    const round = this.getCurrentRound();
+    if (!round) return false;
+    if (roundNumber != null && Number(roundNumber) !== round.roundNumber) {
+      return false;
+    }
+    const player = this.players.get(playerId);
+    if (!player) return false;
+
+    if (eventId) {
+      if (!round.processedCompletedEventIds) {
+        round.processedCompletedEventIds = new Set();
+      }
+      if (round.processedCompletedEventIds.has(eventId)) {
+        return false;
+      }
+      round.processedCompletedEventIds.add(eventId);
+    }
+
+    const parsedAway = Number(awayMs);
+    const clampedAwayMs =
+      Number.isFinite(parsedAway) && parsedAway > 0 ? Math.min(parsedAway, 600000) : 0;
+
+    const existing = round.tabLeaves.get(playerId);
+    if (existing?.isCurrentlyAway) {
+      return this.recordTabReturn(playerId, clampedAwayMs, { allowLocked: true });
+    }
+
+    if (eventId && round.processedLeaveEventIds?.has(eventId)) {
+      return false;
+    }
+
+    const entry = existing || {
+      count: 0,
+      totalAwayMs: 0,
+      lastLeftAt: null,
+      isCurrentlyAway: false
+    };
+
+    entry.count += 1;
+    entry.totalAwayMs += clampedAwayMs;
+    entry.isCurrentlyAway = false;
+    entry.lastLeftAt = null;
+    round.tabLeaves.set(playerId, entry);
+    player.totalTabLeaves = (player.totalTabLeaves || 0) + 1;
     return true;
   }
 

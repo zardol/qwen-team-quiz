@@ -430,18 +430,39 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('student:tab_leave', () => {
-    if (!socket.data.playerId) return;
-    if (game.recordTabLeave(socket.data.playerId)) {
+  socket.on('student:tab_leave', (payload, cb) => {
+    const callback = typeof payload === 'function' ? payload : cb;
+    const eventId = typeof payload === 'object' && payload ? payload.eventId : null;
+    if (!socket.data.playerId) return respond(callback, { ok: false });
+    const recorded = game.recordTabLeave(socket.data.playerId, eventId);
+    if (recorded) {
       io.to('admins').emit('admin:state', game.buildAdminState());
     }
+    return respond(callback, { ok: recorded });
   });
 
-  socket.on('student:tab_return', (payload) => {
-    if (!socket.data.playerId) return;
-    if (game.recordTabReturn(socket.data.playerId, payload?.awayMs)) {
+  socket.on('student:tab_return', (payload, cb) => {
+    if (!socket.data.playerId) return respond(cb, { ok: false, retryable: true });
+    const recorded = game.recordTabReturn(socket.data.playerId, payload?.awayMs, {
+      allowLocked: true
+    });
+    if (recorded) {
       io.to('admins').emit('admin:state', game.buildAdminState());
     }
+    return respond(cb, { ok: recorded });
+  });
+
+  socket.on('student:tab_away_completed', (payload, cb) => {
+    if (!socket.data.playerId) return respond(cb, { ok: false, retryable: true });
+    const recorded = game.recordTabAwayCompleted(socket.data.playerId, {
+      roundNumber: payload?.roundNumber,
+      awayMs: payload?.awayMs,
+      eventId: payload?.eventId
+    });
+    if (recorded) {
+      io.to('admins').emit('admin:state', game.buildAdminState());
+    }
+    return respond(cb, { ok: recorded });
   });
 
   // ---- Admin Events ----
