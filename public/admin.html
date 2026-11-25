@@ -51,9 +51,8 @@
         </div>
         <div class="topbar-meta">
           <span class="pill" id="admin-players-pill">👥 0 онлайн</span>
-          <span class="pill" id="admin-teams-pill">🏁 0 команд</span>
           <button type="button" class="btn btn-secondary btn-sm" id="copy-student-link-btn" data-i18n="copy_student_link">
-            🔗 Ссылка для студентов
+            🔗 Ссылка для участников
           </button>
           <div class="lang-switch" role="group" aria-label="Language">
             <button type="button" class="lang-btn active" data-set-lang="ru">РУС</button>
@@ -161,24 +160,19 @@
             </div>
           </div>
 
-          <!-- Правая колонка: команды и ответы в реальном времени -->
+          <!-- Правая колонка: участники и ответы в реальном времени -->
           <div>
             <div class="card">
               <div class="card-title">
-                <span data-i18n="teams_and_answers_title">Команды и ответы</span>
-                <span class="pill pill-success" id="admin-submitted-pill">0 / 0 ответили</span>
+                <span data-i18n="players_and_answers_title">Участники и ответы</span>
+                <div class="btn-row" style="align-items: center;">
+                  <span class="pill pill-success" id="admin-submitted-pill">0 / 0 ответили</span>
+                  <button type="button" class="btn btn-danger btn-sm" id="kick-offline-btn" data-i18n="kick_offline_btn">
+                    🗑 Удалить офлайн
+                  </button>
+                </div>
               </div>
-              <div id="admin-teams-list"></div>
-            </div>
-
-            <div class="card" id="admin-unassigned-card">
-              <div class="card-title">
-                <span data-i18n="unassigned_title">Участники без команды</span>
-                <button type="button" class="btn btn-danger btn-sm" id="kick-all-unassigned-btn" data-i18n="kick_all_unassigned">
-                  🗑 Удалить всех
-                </button>
-              </div>
-              <div id="admin-unassigned-list"></div>
+              <div id="admin-players-list"></div>
             </div>
           </div>
         </div>

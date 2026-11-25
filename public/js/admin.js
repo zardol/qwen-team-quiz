@@ -22,7 +22,6 @@
     quizTitle: document.getElementById('admin-quiz-title'),
     statusLine: document.getElementById('admin-status-line'),
     playersPill: document.getElementById('admin-players-pill'),
-    teamsPill: document.getElementById('admin-teams-pill'),
     copyStudentLinkBtn: document.getElementById('copy-student-link-btn'),
     logoutBtn: document.getElementById('admin-logout-btn'),
     questionsCountTab: document.getElementById('questions-count-tab'),
@@ -62,10 +61,8 @@
     resetAllBtn: document.getElementById('reset-all-btn'),
     leaderboard: document.getElementById('admin-leaderboard'),
     submittedPill: document.getElementById('admin-submitted-pill'),
-    teamsList: document.getElementById('admin-teams-list'),
-    unassignedCard: document.getElementById('admin-unassigned-card'),
-    unassignedList: document.getElementById('admin-unassigned-list'),
-    kickAllUnassignedBtn: document.getElementById('kick-all-unassigned-btn'),
+    kickOfflineBtn: document.getElementById('kick-offline-btn'),
+    playersList: document.getElementById('admin-players-list'),
     questionFormTitle: document.getElementById('question-form-title'),
     cancelEditQuestionBtn: document.getElementById('cancel-edit-question-btn'),
     questionForm: document.getElementById('question-form'),
@@ -112,6 +109,17 @@
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  function renderCheatBadge(leaveInfo) {
+    if (!leaveInfo) return '';
+    if (leaveInfo.isCurrentlyAway) {
+      return `<span class="cheat-badge away-now">🔴 Вне вкладки (${leaveInfo.count} · ${leaveInfo.totalAwaySec} сек)</span>`;
+    }
+    if (leaveInfo.count > 0) {
+      return `<span class="cheat-badge">⚠️ Выходил из вкладки: ${leaveInfo.count} (${leaveInfo.totalAwaySec} сек)</span>`;
+    }
+    return '';
   }
 
   async function apiFetch(url, options = {}) {
@@ -270,16 +278,26 @@
       <div><strong>Итог судьи (${sourceText}):</strong> ${escapeHtml(evalData.roundSummary)}</div>
     `;
 
+    const tabLeaveMap = round.tabLeaveMap || {};
+    const playerEmojiMap = new Map(state.players.map((p) => [p.id, p.emoji]));
+
     const sorted = [...evalData.evaluations].sort((a, b) => b.score - a.score);
     els.evalList.innerHTML = sorted
       .map((ev) => {
-        const isBest = evalData.bestTeamIds?.includes(ev.teamId);
+        const isBest = evalData.bestPlayerIds?.includes(ev.playerId);
+        const emoji = playerEmojiMap.get(ev.playerId) || '🧠';
+        const leaveInfo = tabLeaveMap[ev.playerId];
+        const cheatBadge = renderCheatBadge(leaveInfo);
+
         return `
           <div class="eval-card ${isBest ? 'winner' : ''}">
             <div class="eval-head">
               <div>
-                <strong>${isBest ? '👑 ' : ''}${escapeHtml(ev.teamName)}</strong>
-                <div class="muted" style="font-size:0.86rem;">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <strong>${isBest ? '👑 ' : ''}${escapeHtml(emoji)} ${escapeHtml(ev.playerName)}</strong>
+                  ${cheatBadge}
+                </div>
+                <div class="muted" style="font-size:0.86rem; margin-top:4px;">
                   Ответ: ${ev.answer ? escapeHtml(ev.answer) : '<em>не отправлен</em>'}
                 </div>
               </div>
@@ -289,20 +307,23 @@
                   min="0"
                   max="100"
                   class="inline-score-input"
-                  data-score-input="${escapeHtml(ev.teamId)}"
+                  data-score-input="${escapeHtml(ev.playerId)}"
                   value="${ev.score}"
                 />
                 <span class="muted">б.</span>
+                <button type="button" class="btn btn-danger btn-sm" data-zero-eval="${escapeHtml(ev.playerId)}" title="Обнулить баллы">
+                  0 б.
+                </button>
               </div>
             </div>
             <div class="btn-row" style="align-items:center;">
               <input
                 type="text"
                 style="flex:1; padding:7px 10px; font-size:0.88rem;"
-                data-comment-input="${escapeHtml(ev.teamId)}"
+                data-comment-input="${escapeHtml(ev.playerId)}"
                 value="${escapeHtml(ev.comment)}"
               />
-              <button type="button" class="btn btn-secondary btn-sm" data-save-eval="${escapeHtml(ev.teamId)}">
+              <button type="button" class="btn btn-secondary btn-sm" data-save-eval="${escapeHtml(ev.playerId)}">
                 Обновить
               </button>
             </div>
@@ -313,149 +334,116 @@
 
     els.evalList.querySelectorAll('[data-save-eval]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const teamId = btn.dataset.saveEval;
-        const scoreInput = els.evalList.querySelector(`[data-score-input="${teamId}"]`);
-        const commentInput = els.evalList.querySelector(`[data-comment-input="${teamId}"]`);
+        const playerId = btn.dataset.saveEval;
+        const scoreInput = els.evalList.querySelector(`[data-score-input="${playerId}"]`);
+        const commentInput = els.evalList.querySelector(`[data-comment-input="${playerId}"]`);
         socket.emit(
           'admin:update_score',
           {
-            teamId,
+            playerId,
             score: Number(scoreInput?.value || 0),
             comment: commentInput?.value || ''
           },
           (res) => {
             if (!res?.ok) showToast(res?.error || 'Не удалось обновить балл', 'error');
-            else showToast('Оценка команды обновлена', 'success');
+            else showToast('Оценка участника обновлена', 'success');
+          }
+        );
+      });
+    });
+
+    els.evalList.querySelectorAll('[data-zero-eval]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const playerId = btn.dataset.zeroEval;
+        const leaveInfo = tabLeaveMap[playerId];
+        const zeroComment = leaveInfo?.count > 0
+          ? 'Оценка обнулена ведущим (зафиксирован выход из вкладки).'
+          : 'Оценка обнулена ведущим.';
+        socket.emit(
+          'admin:update_score',
+          {
+            playerId,
+            score: 0,
+            comment: zeroComment
+          },
+          (res) => {
+            if (!res?.ok) showToast(res?.error || 'Не удалось обнулить балл', 'error');
+            else showToast('Баллы участника обнулены', 'success');
           }
         );
       });
     });
   }
 
-  function renderTeamsPanel(state) {
+  function renderPlayersPanel(state) {
     const round = state.currentRound;
+    const players = state.players || [];
+
     if (round) {
       els.submittedPill.textContent = t('answered_stats', {
         submitted: round.submittedCount,
-        total: round.totalTeams
+        total: round.totalPlayers
       });
     } else {
-      els.submittedPill.textContent = t('teams_count', { n: state.teams.length });
+      els.submittedPill.textContent = t('players_count', { n: players.length });
     }
 
-    if (!state.teams.length) {
-      els.teamsList.innerHTML = '<div class="muted">Студенты ещё не создали ни одной команды.</div>';
-    } else {
-      els.teamsList.innerHTML = state.teams
-        .map((team) => {
-          const membersHtml = team.members
-            .map((m) => {
-              const capBadge = m.isCaptain ? '👑 ' : '';
-              const statusDot = `<span class="dot ${m.isOnline ? 'online' : 'offline'}"></span>`;
-              const makeCapBtn = !m.isCaptain
-                ? `<button type="button" class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:0.72rem;" data-make-captain="${escapeHtml(team.id)}" data-player-id="${escapeHtml(m.id)}" title="Сделать капитаном">👑</button>`
-                : '';
-              const kickBtn = `<button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:0.72rem;" data-kick-player="${escapeHtml(m.id)}" title="Удалить игрока">✕</button>`;
+    const offlineCount = players.filter((p) => !p.isOnline).length;
+    els.kickOfflineBtn.disabled = offlineCount === 0;
 
-              return `
-                <span class="member-chip">
-                  ${statusDot}
-                  ${capBadge}${escapeHtml(m.name)}
-                  ${makeCapBtn}
-                  ${kickBtn}
-                </span>
-              `;
-            })
-            .join('');
+    if (!players.length) {
+      els.playersList.innerHTML = '<div class="muted">Участники ещё не подключились.</div>';
+      return;
+    }
 
-          const submissionHtml = round
-            ? team.submission
-              ? `<div class="alert alert-success" style="margin:8px 0 0; padding:8px 10px;">
-                   <strong>Ответ:</strong> ${escapeHtml(team.submission.text)}
-                   <div class="muted" style="font-size:0.76rem;">Отправил: ${escapeHtml(team.submission.submittedBy)} · Идей в чате: ${team.ideasCount}</div>
-                 </div>`
-              : `<div class="muted" style="margin-top:8px; font-size:0.84rem;">⏳ Ответ ещё не отправлен · Идей в чате: ${team.ideasCount}</div>`
-            : '';
+    els.playersList.innerHTML = players
+      .map((player) => {
+        const statusDot = `<span class="dot ${player.isOnline ? 'online' : 'offline'}"></span>`;
+        const cheatBadge = renderCheatBadge(player.tabLeaveInfo);
+        const submissionHtml = round
+          ? player.submission
+            ? `<div class="alert alert-success" style="margin:8px 0 0; padding:8px 10px;">
+                 <strong>Ответ:</strong> ${escapeHtml(player.submission.text)}
+               </div>`
+            : `<div class="muted" style="margin-top:8px; font-size:0.84rem;">⏳ Ответ ещё не отправлен</div>`
+          : '';
 
-          return `
-            <div class="eval-card">
-              <div class="eval-head">
-                <div style="font-weight:700;">
-                  ${escapeHtml(team.emoji)} ${escapeHtml(team.name)}
-                  <span class="pill" style="margin-left:6px;">${team.totalScore} б.</span>
-                </div>
-                <button type="button" class="btn btn-danger btn-sm" data-delete-team="${escapeHtml(team.id)}">Удалить</button>
+        return `
+          <div class="eval-card">
+            <div class="eval-head">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                ${statusDot}
+                <strong>${escapeHtml(player.emoji)} ${escapeHtml(player.name)}</strong>
+                <span class="pill">${player.totalScore} б.</span>
+                ${cheatBadge}
               </div>
-              <div class="member-chips">${membersHtml || '<span class="muted">Нет участников</span>'}</div>
-              ${submissionHtml}
+              <button type="button" class="btn btn-danger btn-sm" data-kick-player="${escapeHtml(player.id)}" title="Удалить участника">
+                ✕
+              </button>
             </div>
-          `;
-        })
-        .join('');
+            ${submissionHtml}
+          </div>
+        `;
+      })
+      .join('');
 
-      els.teamsList.querySelectorAll('[data-make-captain]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          socket.emit(
-            'admin:set_captain',
-            { teamId: btn.dataset.makeCaptain, playerId: btn.dataset.playerId },
-            (res) => {
-              if (!res?.ok) showToast(res?.error || 'Ошибка', 'error');
-              else showToast('Капитан команды изменён', 'success');
-            }
-          );
+    els.playersList.querySelectorAll('[data-kick-player]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Удалить этого участника из игры?')) return;
+        socket.emit('admin:kick_player', { playerId: btn.dataset.kickPlayer }, (res) => {
+          if (!res?.ok) showToast(res?.error || 'Ошибка', 'error');
         });
       });
-
-      els.teamsList.querySelectorAll('[data-kick-player]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          if (!confirm('Удалить этого участника из игры?')) return;
-          socket.emit('admin:kick_player', { playerId: btn.dataset.kickPlayer }, (res) => {
-            if (!res?.ok) showToast(res?.error || 'Ошибка', 'error');
-          });
-        });
-      });
-
-      els.teamsList.querySelectorAll('[data-delete-team]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          if (!confirm('Удалить эту команду? Участники останутся без команды.')) return;
-          socket.emit('admin:delete_team', { teamId: btn.dataset.deleteTeam }, (res) => {
-            if (!res?.ok) showToast(res?.error || 'Ошибка', 'error');
-          });
-        });
-      });
-    }
-
-    if (!state.unassignedPlayers.length) {
-      els.unassignedCard.classList.add('hidden');
-    } else {
-      els.unassignedCard.classList.remove('hidden');
-      els.unassignedList.innerHTML = `<div class="member-chips">${state.unassignedPlayers
-        .map(
-          (p) => `
-            <span class="member-chip">
-              <span class="dot ${p.isOnline ? 'online' : 'offline'}"></span>
-              ${escapeHtml(p.name)}
-              <button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px; font-size:0.72rem;" data-kick-unassigned="${escapeHtml(p.id)}">✕</button>
-            </span>
-          `
-        )
-        .join('')}</div>`;
-
-      els.unassignedList.querySelectorAll('[data-kick-unassigned]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          socket.emit('admin:kick_player', { playerId: btn.dataset.kickUnassigned });
-        });
-      });
-    }
+    });
   }
 
   function renderLeaderboard(state) {
     if (!state.leaderboard.length) {
-      els.leaderboard.innerHTML = '<div class="muted">Команд пока нет.</div>';
+      els.leaderboard.innerHTML = '<div class="muted">Участников пока нет.</div>';
       return;
     }
     els.leaderboard.innerHTML = state.leaderboard
-      .map((team, idx) => {
+      .map((entry, idx) => {
         const rank = idx + 1;
         const rankClass = rank <= 3 ? `r${rank}` : '';
         return `
@@ -463,11 +451,10 @@
             <div style="display:flex; align-items:center; gap:10px;">
               <div class="leader-rank ${rankClass}">${rank}</div>
               <div>
-                <strong>${escapeHtml(team.emoji)} ${escapeHtml(team.name)}</strong>
-                <span class="muted" style="font-size:0.8rem;"> (${team.memberCount} уч.)</span>
+                <strong>${escapeHtml(entry.emoji)} ${escapeHtml(entry.name)}</strong>
               </div>
             </div>
-            <strong>${team.totalScore} б.</strong>
+            <strong>${entry.totalScore} б.</strong>
           </div>
         `;
       })
@@ -483,12 +470,11 @@
     }
 
     els.questionsList.innerHTML = state.questions
-      .map(
-        (q, idx) => {
-          const locTitle = pickLocalized(q.title, q.titleKk);
-          const locQuestion = pickLocalized(q.question, q.questionKk);
-          const locRef = pickLocalized(q.referenceAnswer, q.referenceAnswerKk);
-          return `
+      .map((q, idx) => {
+        const locTitle = pickLocalized(q.title, q.titleKk);
+        const locQuestion = pickLocalized(q.question, q.questionKk);
+        const locRef = pickLocalized(q.referenceAnswer, q.referenceAnswerKk);
+        return `
           <div class="eval-card">
             <div class="eval-head">
               <div>
@@ -513,8 +499,7 @@
             }
           </div>
         `;
-        }
-      )
+      })
       .join('');
 
     els.questionsList.querySelectorAll('[data-edit-q]').forEach((btn) => {
@@ -578,7 +563,7 @@
     settingsInitialized = true;
 
     els.settingQuizTitle.value = settings.quizTitle || '';
-    els.settingDefaultTime.value = settings.defaultTimeLimit || 90;
+    els.settingDefaultTime.value = settings.defaultTimeLimit || 60;
     els.settingQwenUrl.value = settings.qwenBaseUrl || '';
     els.settingQwenModel.value = settings.qwenModel || 'qwen-plus';
 
@@ -596,7 +581,6 @@
       online: state.onlinePlayersCount,
       total: state.totalPlayersCount
     });
-    els.teamsPill.textContent = `🏁 ${t('teams_count', { n: state.teams.length })}`;
     els.phasePill.textContent = getPhaseLabel(state.status);
 
     renderRoundSelect(state);
@@ -647,7 +631,7 @@
     }
 
     renderEvaluations(state);
-    renderTeamsPanel(state);
+    renderPlayersPanel(state);
     renderLeaderboard(state);
     renderQuestionsList(state);
     syncSettingsUI(state.settings, false);
@@ -656,7 +640,7 @@
   function resetQuestionForm() {
     els.qEditId.value = '';
     els.questionForm.reset();
-    els.qTimeInput.value = adminState?.settings?.defaultTimeLimit || 90;
+    els.qTimeInput.value = adminState?.settings?.defaultTimeLimit || 60;
     els.questionFormTitle.textContent = 'Добавить новый вопрос';
     els.saveQuestionBtn.textContent = '➕ Добавить вопрос';
     els.cancelEditQuestionBtn.classList.add('hidden');
@@ -746,7 +730,7 @@
       await navigator.clipboard.writeText(url);
       showToast(`Ссылка скопирована: ${url}`, 'success');
     } catch {
-      prompt('Скопируйте ссылку для студентов:', url);
+      prompt('Скопируйте ссылку для участников:', url);
     }
   });
 
@@ -802,7 +786,7 @@
     els.judgeError.classList.add('hidden');
     socket.emit('admin:judge_round', {}, (res) => {
       if (res?.ok) {
-        showToast('ИИ Qwen оценил ответы команд! Проверьте и опубликуйте.', 'success');
+        showToast('ИИ Qwen оценил ответы участников! Проверьте и опубликуйте.', 'success');
         return;
       }
 
@@ -850,7 +834,7 @@
   els.publishResultsBtn.addEventListener('click', () => {
     socket.emit('admin:publish_results', (res) => {
       if (!res?.ok) showToast(res?.error || 'Ошибка публикации', 'error');
-      else showToast('Результаты раунда опубликованы студентам!', 'success');
+      else showToast('Результаты раунда опубликованы участникам!', 'success');
     });
   });
 
@@ -862,27 +846,27 @@
   });
 
   els.resetScoresBtn.addEventListener('click', () => {
-    if (!confirm('Сбросить все баллы и начать игру заново (команды останутся)?')) return;
-    socket.emit('admin:reset_quiz', { keepTeams: true }, (res) => {
+    if (!confirm('Сбросить все баллы и начать игру заново (участники останутся)?')) return;
+    socket.emit('admin:reset_quiz', { keepPlayers: true }, (res) => {
       if (res?.ok) showToast('Очки сброшены, игра возвращена в лобби', 'success');
     });
   });
 
   els.resetAllBtn.addEventListener('click', () => {
-    if (!confirm('Полностью сбросить игру и удалить все команды?')) return;
-    socket.emit('admin:reset_quiz', { keepTeams: false }, (res) => {
+    if (!confirm('Полностью сбросить игру и удалить всех участников?')) return;
+    socket.emit('admin:reset_quiz', { keepPlayers: false }, (res) => {
       if (res?.ok) showToast('Игра полностью сброшена', 'success');
     });
   });
 
-  els.kickAllUnassignedBtn.addEventListener('click', () => {
-    if (!confirm('Удалить всех участников без команды из текущей сессии?')) return;
-    socket.emit('admin:kick_unassigned', (res) => {
+  els.kickOfflineBtn.addEventListener('click', () => {
+    if (!confirm('Удалить всех отключённых (офлайн) участников?')) return;
+    socket.emit('admin:kick_offline', (res) => {
       if (!res?.ok) {
         showToast(res?.error || 'Ошибка удаления участников', 'error');
         return;
       }
-      showToast(`Удалено участников без команды: ${res.count}`, 'success');
+      showToast(`Удалено офлайн-участников: ${res.count}`, 'success');
     });
   });
 
@@ -897,7 +881,7 @@
       question: els.qTextInput.value.trim(),
       referenceAnswer: els.qRefInput.value.trim(),
       criteria: els.qCriteriaInput.value.trim(),
-      timeLimit: Number(els.qTimeInput.value) || 90
+      timeLimit: Number(els.qTimeInput.value) || 60
     };
 
     try {
@@ -934,7 +918,7 @@
     e.preventDefault();
     const payload = {
       quizTitle: els.settingQuizTitle.value.trim(),
-      defaultTimeLimit: Number(els.settingDefaultTime.value) || 90,
+      defaultTimeLimit: Number(els.settingDefaultTime.value) || 60,
       qwenBaseUrl: els.settingQwenUrl.value.trim(),
       qwenModel: els.settingQwenModel.value.trim()
     };

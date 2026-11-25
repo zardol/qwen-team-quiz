@@ -203,7 +203,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     status: game.status,
-    teams: game.teams.size,
+    players: game.players.size,
     onlinePlayers: Array.from(game.players.values()).filter((p) => p.isOnline).length,
     uptimeSec: Math.round(process.uptime())
   });
@@ -386,9 +386,7 @@ io.on('connection', (socket) => {
     if (socket.data.isSpectator) {
       socket.data.playerId = null;
     }
-    const state = game.buildStudentStateForPlayer(socket.data.playerId || null, {
-      isSpectator: socket.data.isSpectator
-    });
+    const state = game.buildStudentStateForPlayer(socket.data.playerId || null);
     socket.emit('game:state', state);
     respond(cb, { ok: true, state });
   });
@@ -400,6 +398,7 @@ io.on('connection', (socket) => {
         playerId: payload?.playerId,
         playerToken: payload?.playerToken,
         name: payload?.name,
+        emoji: payload?.emoji,
         socketId: socket.id
       });
       socket.data.playerId = player.id;
@@ -421,56 +420,27 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('student:create_team', (payload, cb) => {
-    try {
-      if (!socket.data.playerId) throw new Error('Сначала введите своё имя.');
-      const team = game.createTeam(socket.data.playerId, payload || {});
-      respond(cb, { ok: true, teamId: team.id });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
-  socket.on('student:join_team', (payload, cb) => {
-    try {
-      if (!socket.data.playerId) throw new Error('Сначала введите своё имя.');
-      const team = game.joinTeam(socket.data.playerId, payload?.teamId);
-      respond(cb, { ok: true, teamId: team.id });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
-  socket.on('student:leave_team', (cb) => {
-    try {
-      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
-      if (game.status !== GAME_STATUS.LOBBY) {
-        throw new Error('Сменять команду можно только в лобби до начала раунда.');
-      }
-      game.leaveTeam(socket.data.playerId);
-      respond(cb, { ok: true });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
-  socket.on('student:submit_idea', (payload, cb) => {
-    try {
-      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
-      const idea = game.submitIdea(socket.data.playerId, payload?.text);
-      respond(cb, { ok: true, idea });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
   socket.on('student:submit_answer', (payload, cb) => {
     try {
-      if (!socket.data.playerId) throw new Error('Игрок не зарегистрирован.');
-      const submission = game.submitTeamAnswer(socket.data.playerId, payload?.text);
+      if (!socket.data.playerId) throw new Error('Сначала войдите в игру.');
+      const submission = game.submitPlayerAnswer(socket.data.playerId, payload?.text);
       respond(cb, { ok: true, submission });
     } catch (err) {
       respond(cb, { ok: false, error: err.message });
+    }
+  });
+
+  socket.on('student:tab_leave', () => {
+    if (!socket.data.playerId) return;
+    if (game.recordTabLeave(socket.data.playerId)) {
+      io.to('admins').emit('admin:state', game.buildAdminState());
+    }
+  });
+
+  socket.on('student:tab_return', (payload) => {
+    if (!socket.data.playerId) return;
+    if (game.recordTabReturn(socket.data.playerId, payload?.awayMs)) {
+      io.to('admins').emit('admin:state', game.buildAdminState());
     }
   });
 
@@ -555,18 +525,18 @@ io.on('connection', (socket) => {
       if (game.status === GAME_STATUS.ROUND_ACTIVE) {
         game.lockRound();
       }
-      if (game.teams.size === 0) {
-        throw new Error('В квизе пока нет ни одной команды.');
+      if (game.players.size === 0) {
+        throw new Error('В квизе пока нет ни одного участника.');
       }
 
       game.setJudgingStatus(true);
-      const teamAnswers = game.getTeamAnswersForJudging();
+      const playerAnswers = game.getPlayerAnswersForJudging();
 
       if (payload?.useFallback) {
         const fallbackRes = fallbackJudgeAnswers({
           referenceAnswer: round.referenceAnswer,
           referenceAnswerKk: round.referenceAnswerKk,
-          teamAnswers,
+          playerAnswers,
           reason: payload?.reason || 'Выбрана резервная автооценка'
         });
         game.setDraftResults(fallbackRes);
@@ -580,7 +550,7 @@ io.on('connection', (socket) => {
           referenceAnswer: round.referenceAnswer,
           referenceAnswerKk: round.referenceAnswerKk,
           criteria: round.criteria,
-          teamAnswers,
+          playerAnswers,
           config: game.getQwenRuntimeConfig()
         });
         game.setDraftResults(aiResult);
@@ -616,7 +586,7 @@ io.on('connection', (socket) => {
     try {
       ensureAdmin();
       const updated = game.updateEvaluationScore({
-        teamId: payload?.teamId,
+        playerId: payload?.playerId,
         score: payload?.score,
         comment: payload?.comment
       });
@@ -649,27 +619,7 @@ io.on('connection', (socket) => {
   socket.on('admin:reset_quiz', (payload, cb) => {
     try {
       ensureAdmin();
-      game.resetQuiz({ keepTeams: Boolean(payload?.keepTeams) });
-      respond(cb, { ok: true });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
-  socket.on('admin:set_captain', (payload, cb) => {
-    try {
-      ensureAdmin();
-      game.setTeamCaptain(payload?.teamId, payload?.playerId);
-      respond(cb, { ok: true });
-    } catch (err) {
-      respond(cb, { ok: false, error: err.message });
-    }
-  });
-
-  socket.on('admin:delete_team', (payload, cb) => {
-    try {
-      ensureAdmin();
-      game.deleteTeam(payload?.teamId);
+      game.resetQuiz({ keepPlayers: Boolean(payload?.keepPlayers) });
       respond(cb, { ok: true });
     } catch (err) {
       respond(cb, { ok: false, error: err.message });
@@ -694,10 +644,10 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('admin:kick_unassigned', (cb) => {
+  socket.on('admin:kick_offline', (cb) => {
     try {
       ensureAdmin();
-      const removedIds = game.kickUnassignedPlayers();
+      const removedIds = game.kickOfflinePlayers();
       const removedSet = new Set(removedIds);
       for (const s of io.sockets.sockets.values()) {
         if (s.data.playerId && removedSet.has(s.data.playerId)) {

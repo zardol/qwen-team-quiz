@@ -2,6 +2,7 @@
   const STORAGE_ID_KEY = 'qwen_quiz_player_id';
   const STORAGE_TOKEN_KEY = 'qwen_quiz_player_token';
   const STORAGE_NAME_KEY = 'qwen_quiz_player_name';
+  const STORAGE_EMOJI_KEY = 'qwen_quiz_player_emoji';
   const SPECTATOR_KEY = 'qwen_quiz_spectator';
   const { t, pickLocalized, initLangSwitcher } = window.QuizI18n;
 
@@ -12,17 +13,28 @@
   });
 
   const urlParams = new URLSearchParams(window.location.search);
-  let isSpectator =
-    urlParams.get('spectator') === '1' || sessionStorage.getItem(SPECTATOR_KEY) === '1';
-  if (urlParams.get('spectator') === '1') {
+  let mode = null; // null (role select) | 'player' | 'spectator'
+  if (urlParams.get('spectator') === '1' || sessionStorage.getItem(SPECTATOR_KEY) === '1') {
+    mode = 'spectator';
     sessionStorage.setItem(SPECTATOR_KEY, '1');
+  } else if (
+    localStorage.getItem(STORAGE_ID_KEY) &&
+    localStorage.getItem(STORAGE_TOKEN_KEY) &&
+    localStorage.getItem(STORAGE_NAME_KEY)
+  ) {
+    mode = 'player';
   }
 
   let currentState = null;
   let isConnected = false;
-  let selectedEmoji = '🚀';
+  let selectedEmoji = localStorage.getItem(STORAGE_EMOJI_KEY) || '🚀';
   let lastRoundKey = null;
-  let captainDirty = false;
+  let answerDirty = false;
+
+  // Anti-cheat tab-leave tracking state
+  let awayStartedAt = null;
+  let leaveDebounceTimer = null;
+  let hasReportedLeave = false;
 
   const timerSync = {
     active: false,
@@ -39,15 +51,44 @@
     connectionStatus: document.getElementById('connection-status'),
     playerMeta: document.getElementById('player-meta'),
     screens: {
+      roleSelect: document.getElementById('screen-role-select'),
       login: document.getElementById('screen-login'),
-      teamSelect: document.getElementById('screen-team-select'),
       lobby: document.getElementById('screen-lobby'),
       round: document.getElementById('screen-round'),
       results: document.getElementById('screen-results'),
       finished: document.getElementById('screen-finished'),
       spectator: document.getElementById('screen-spectator')
     },
-    enterSpectatorBtn: document.getElementById('enter-spectator-btn'),
+    choosePlayBtn: document.getElementById('choose-play-btn'),
+    chooseSpectatorBtn: document.getElementById('choose-spectator-btn'),
+    backToRoleBtn: document.getElementById('back-to-role-btn'),
+    loginForm: document.getElementById('login-form'),
+    playerNameInput: document.getElementById('player-name-input'),
+    emojiPicker: document.getElementById('emoji-picker'),
+    myLobbyCard: document.getElementById('my-lobby-card'),
+    lobbyPlayersCount: document.getElementById('lobby-players-count'),
+    lobbyPlayersList: document.getElementById('lobby-players-list'),
+    roundHeading: document.getElementById('round-heading'),
+    roundPlayerPill: document.getElementById('round-player-pill'),
+    roundTimerLabel: document.getElementById('round-timer-label'),
+    roundTimerValue: document.getElementById('round-timer-value'),
+    roundTimerBar: document.getElementById('round-timer-bar'),
+    roundQuestionText: document.getElementById('round-question-text'),
+    roundStatusBanner: document.getElementById('round-status-banner'),
+    playerAnswerPanel: document.getElementById('player-answer-panel'),
+    playerSubmittedBanner: document.getElementById('player-submitted-banner'),
+    playerAnswerForm: document.getElementById('player-answer-form'),
+    playerAnswerInput: document.getElementById('player-answer-input'),
+    playerSubmitBtn: document.getElementById('player-submit-btn'),
+    myRoundResultCard: document.getElementById('my-round-result-card'),
+    resultsRoundTitle: document.getElementById('results-round-title'),
+    resultsJudgeBadge: document.getElementById('results-judge-badge'),
+    resultsReferenceAnswer: document.getElementById('results-reference-answer'),
+    resultsSummary: document.getElementById('results-summary'),
+    resultsEvaluations: document.getElementById('results-evaluations'),
+    resultsLeaderboard: document.getElementById('results-leaderboard'),
+    finalLeaderboard: document.getElementById('final-leaderboard'),
+    finalHistory: document.getElementById('final-history'),
     spectatorPhaseTitle: document.getElementById('spectator-phase-title'),
     spectatorPhasePill: document.getElementById('spectator-phase-pill'),
     spectatorTimerWrap: document.getElementById('spectator-timer-wrap'),
@@ -62,49 +103,10 @@
     spectatorReferenceAnswer: document.getElementById('spectator-reference-answer'),
     spectatorResultsSummary: document.getElementById('spectator-results-summary'),
     spectatorResultsEvaluations: document.getElementById('spectator-results-evaluations'),
-    spectatorTeamsHeading: document.getElementById('spectator-teams-heading'),
+    spectatorPlayersHeading: document.getElementById('spectator-players-heading'),
     spectatorAnsweredPill: document.getElementById('spectator-answered-pill'),
-    spectatorTeamsList: document.getElementById('spectator-teams-list'),
+    spectatorPlayersList: document.getElementById('spectator-players-list'),
     spectatorLeaderboard: document.getElementById('spectator-leaderboard'),
-    loginForm: document.getElementById('login-form'),
-    playerNameInput: document.getElementById('player-name-input'),
-    createTeamForm: document.getElementById('create-team-form'),
-    newTeamName: document.getElementById('new-team-name'),
-    emojiPicker: document.getElementById('emoji-picker'),
-    teamsCountPill: document.getElementById('teams-count-pill'),
-    availableTeamsList: document.getElementById('available-teams-list'),
-    myTeamLobbyCard: document.getElementById('my-team-lobby-card'),
-    lobbyTeamsCount: document.getElementById('lobby-teams-count'),
-    lobbyTeamsList: document.getElementById('lobby-teams-list'),
-    roundHeading: document.getElementById('round-heading'),
-    roundTeamPill: document.getElementById('round-team-pill'),
-    roundTimerLabel: document.getElementById('round-timer-label'),
-    roundTimerValue: document.getElementById('round-timer-value'),
-    roundTimerBar: document.getElementById('round-timer-bar'),
-    roundQuestionText: document.getElementById('round-question-text'),
-    roundStatusBanner: document.getElementById('round-status-banner'),
-    captainPanel: document.getElementById('captain-panel'),
-    captainSubmittedBanner: document.getElementById('captain-submitted-banner'),
-    captainAnswerForm: document.getElementById('captain-answer-form'),
-    captainAnswerInput: document.getElementById('captain-answer-input'),
-    captainSubmitBtn: document.getElementById('captain-submit-btn'),
-    memberPanel: document.getElementById('member-panel'),
-    memberOfficialStatus: document.getElementById('member-official-status'),
-    memberIdeaForm: document.getElementById('member-idea-form'),
-    memberIdeaInput: document.getElementById('member-idea-input'),
-    ideasCountPill: document.getElementById('ideas-count-pill'),
-    captainNoteFormWrap: document.getElementById('captain-note-form-wrap'),
-    captainIdeaForm: document.getElementById('captain-idea-form'),
-    captainIdeaInput: document.getElementById('captain-idea-input'),
-    teamIdeasFeed: document.getElementById('team-ideas-feed'),
-    resultsRoundTitle: document.getElementById('results-round-title'),
-    resultsJudgeBadge: document.getElementById('results-judge-badge'),
-    resultsReferenceAnswer: document.getElementById('results-reference-answer'),
-    resultsSummary: document.getElementById('results-summary'),
-    resultsEvaluations: document.getElementById('results-evaluations'),
-    resultsLeaderboard: document.getElementById('results-leaderboard'),
-    finalLeaderboard: document.getElementById('final-leaderboard'),
-    finalHistory: document.getElementById('final-history'),
     toastStack: document.getElementById('toast-stack')
   };
 
@@ -122,9 +124,7 @@
     div.className = `toast ${type}`;
     div.textContent = message;
     els.toastStack.appendChild(div);
-    setTimeout(() => {
-      div.remove();
-    }, 4000);
+    setTimeout(() => div.remove(), 4000);
   }
 
   function formatTime(totalSec) {
@@ -213,30 +213,92 @@
     }
   }
 
+  // ========================
+  // Anti-cheat Tab Tracking
+  // ========================
+
+  function isAntiCheatArmed() {
+    return (
+      mode === 'player' &&
+      currentState &&
+      currentState.status === 'ROUND_ACTIVE' &&
+      Boolean(currentState.player)
+    );
+  }
+
+  function resetAntiCheatTracking() {
+    if (leaveDebounceTimer) {
+      clearTimeout(leaveDebounceTimer);
+      leaveDebounceTimer = null;
+    }
+    awayStartedAt = null;
+    hasReportedLeave = false;
+  }
+
+  function handleWindowLeave() {
+    if (!isAntiCheatArmed() || awayStartedAt !== null) return;
+    awayStartedAt = Date.now();
+    leaveDebounceTimer = setTimeout(() => {
+      leaveDebounceTimer = null;
+      if (awayStartedAt !== null && isAntiCheatArmed() && !hasReportedLeave) {
+        hasReportedLeave = true;
+        socket.emit('student:tab_leave');
+      }
+    }, 1500);
+  }
+
+  function handleWindowReturn() {
+    if (awayStartedAt === null) return;
+    if (leaveDebounceTimer) {
+      clearTimeout(leaveDebounceTimer);
+      leaveDebounceTimer = null;
+    }
+    const elapsed = Date.now() - awayStartedAt;
+    awayStartedAt = null;
+    if (hasReportedLeave) {
+      hasReportedLeave = false;
+      if (isAntiCheatArmed()) {
+        socket.emit('student:tab_return', { awayMs: elapsed });
+      }
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      handleWindowLeave();
+    } else {
+      handleWindowReturn();
+    }
+  });
+
+  window.addEventListener('blur', handleWindowLeave);
+  window.addEventListener('focus', handleWindowReturn);
+
+  // ========================
+  // Rendering
+  // ========================
+
   function renderTopBar(state) {
     document.title = t('page_title_student');
     els.quizTitle.textContent = pickLocalized(state.quizTitle, state.quizTitleKk) || t('default_quiz_title');
     updateConnectionLabel();
-    els.mainContainer.classList.toggle('container-spectator', isSpectator);
+    els.mainContainer.classList.toggle('container-spectator', mode === 'spectator');
 
-    if (isSpectator) {
+    if (mode === 'spectator') {
       els.playerMeta.innerHTML = `
         <span class="pill pill-primary">${escapeHtml(t('spectator_badge'))}</span>
         <button type="button" class="btn btn-secondary btn-sm" id="become-player-btn">${escapeHtml(t('become_player_btn'))}</button>
       `;
-      const becomeBtn = document.getElementById('become-player-btn');
-      if (becomeBtn) {
-        becomeBtn.addEventListener('click', () => {
-          isSpectator = false;
-          sessionStorage.removeItem(SPECTATOR_KEY);
-          if (window.location.search.includes('spectator=1')) {
-            window.history.replaceState({}, '', window.location.pathname);
-          }
-          socket.emit('student:set_spectator', { enabled: false }, (res) => {
-            if (res?.state) render(res.state);
-          });
+      document.getElementById('become-player-btn')?.addEventListener('click', () => {
+        mode = 'player';
+        sessionStorage.removeItem(SPECTATOR_KEY);
+        if (window.location.search.includes('spectator=1')) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+        socket.emit('student:set_spectator', { enabled: false }, (res) => {
+          if (res?.state) render(res.state);
         });
-      }
+      });
       return;
     }
 
@@ -245,28 +307,17 @@
       return;
     }
 
-    const parts = [
-      `<span class="pill"><span class="dot online"></span>${escapeHtml(state.player.name)}</span>`
-    ];
-    if (state.myTeam) {
-      parts.push(
-        `<span class="pill pill-primary">${escapeHtml(state.myTeam.emoji)} ${escapeHtml(state.myTeam.name)} · ${state.myTeam.totalScore} ${escapeHtml(t('pts_short'))}</span>`
-      );
-    }
-    parts.push(
-      `<button type="button" class="btn btn-secondary btn-sm" id="logout-player-btn">${escapeHtml(t('change_name'))}</button>`
-    );
-    els.playerMeta.innerHTML = parts.join('');
+    els.playerMeta.innerHTML = `
+      <span class="pill pill-primary">${escapeHtml(state.player.emoji)} ${escapeHtml(state.player.name)} · ${state.player.totalScore} ${escapeHtml(t('pts_short'))}</span>
+      <button type="button" class="btn btn-secondary btn-sm" id="logout-player-btn">${escapeHtml(t('change_name'))}</button>
+    `;
 
-    const logoutBtn = document.getElementById('logout-player-btn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => {
-        localStorage.removeItem(STORAGE_ID_KEY);
-        localStorage.removeItem(STORAGE_TOKEN_KEY);
-        localStorage.removeItem(STORAGE_NAME_KEY);
-        window.location.reload();
-      });
-    }
+    document.getElementById('logout-player-btn')?.addEventListener('click', () => {
+      localStorage.removeItem(STORAGE_ID_KEY);
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      localStorage.removeItem(STORAGE_NAME_KEY);
+      window.location.reload();
+    });
   }
 
   function renderEmojiPicker(emojis) {
@@ -284,116 +335,74 @@
     els.emojiPicker.querySelectorAll('.emoji-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         selectedEmoji = btn.dataset.emoji;
+        localStorage.setItem(STORAGE_EMOJI_KEY, selectedEmoji);
         renderEmojiPicker(emojis);
       });
     });
   }
 
-  function renderTeamsList(container, teams, { allowJoin = false, myTeamId = null } = {}) {
-    if (!teams.length) {
-      container.innerHTML = `<div class="muted">${escapeHtml(t('no_teams_yet'))}</div>`;
+  function renderPlayersGrid(container, players, { showSubmissionStatus = false } = {}) {
+    if (!players || !players.length) {
+      container.innerHTML = `<div class="muted">${escapeHtml(t('no_players_yet'))}</div>`;
       return;
     }
 
-    container.innerHTML = teams
-      .map((team) => {
-        const isMine = team.id === myTeamId;
-        const memberNames = team.members
-          .map(
-            (m) =>
-              `${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}${m.isOnline ? '' : ` ${escapeHtml(t('offline_tag'))}`}`
-          )
-          .join(', ');
-
-        const actionHtml = allowJoin
-          ? `<button type="button" class="btn btn-sm ${isMine ? 'btn-secondary' : ''}" data-join-team="${escapeHtml(team.id)}" ${isMine ? 'disabled' : ''}>${escapeHtml(isMine ? t('your_team_btn') : t('join_btn'))}</button>`
-          : `<span class="pill">${team.memberCount} ${escapeHtml(t('members_short'))} · ${team.totalScore} ${escapeHtml(t('pts_short'))}</span>`;
-
+    container.innerHTML = players
+      .map((p) => {
+        const rightBadge = showSubmissionStatus
+          ? `<span class="pill ${p.hasSubmitted ? 'pill-success' : 'pill-warning'}">${escapeHtml(p.hasSubmitted ? t('status_answered') : t('status_thinking'))}</span>`
+          : `<span class="pill">${p.totalScore} ${escapeHtml(t('pts_short'))}</span>`;
         return `
-          <div class="team-item">
-            <div class="team-item-left">
-              <div class="team-emoji">${escapeHtml(team.emoji)}</div>
-              <div>
-                <div class="team-name">${escapeHtml(team.name)}</div>
-                <div class="muted" style="font-size: 0.82rem;">
-                  ${team.memberCount} ${escapeHtml(t('members_short'))}: ${memberNames || escapeHtml(t('nobody_yet'))}
-                </div>
-              </div>
+          <div class="player-tile">
+            <div class="player-tile-left">
+              <span class="dot ${p.isOnline ? 'online' : 'offline'}"></span>
+              <span>${escapeHtml(p.emoji)}</span>
+              <span class="player-tile-name">${escapeHtml(p.name)}</span>
             </div>
-            <div>${actionHtml}</div>
+            ${rightBadge}
           </div>
         `;
       })
       .join('');
-
-    if (allowJoin) {
-      container.querySelectorAll('[data-join-team]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const teamId = btn.dataset.joinTeam;
-          socket.emit('student:join_team', { teamId }, (res) => {
-            if (!res?.ok) {
-              showToast(res?.error || t('toast_join_err'), 'error');
-            } else {
-              showToast(t('toast_joined'), 'success');
-            }
-          });
-        });
-      });
-    }
   }
 
-  function renderMyTeamLobby(state) {
-    const team = state.myTeam;
-    const membersHtml = team.members
-      .map(
-        (m) => `
-          <span class="member-chip">
-            <span class="dot ${m.isOnline ? 'online' : 'offline'}"></span>
-            ${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}
-          </span>
-        `
-      )
-      .join('');
-
-    els.myTeamLobbyCard.innerHTML = `
+  function renderLobbyScreen(state) {
+    const p = state.player;
+    els.myLobbyCard.innerHTML = `
       <div class="card-title">
-        <span>${escapeHtml(t('your_team_title', { emoji: team.emoji, name: team.name }))}</span>
-        <span class="pill ${team.isCaptain ? 'pill-success' : 'pill-primary'}">
-          ${escapeHtml(team.isCaptain ? t('role_captain') : t('role_member'))}
-        </span>
+        <span>${escapeHtml(t('my_profile_title', { emoji: p.emoji, name: p.name }))}</span>
+        <span class="pill pill-success">${escapeHtml(t('individual_mode_badge'))}</span>
       </div>
-      <p class="muted" style="margin-top: 0;">
-        ${escapeHtml(team.isCaptain ? t('captain_hint') : t('member_hint'))}
-      </p>
-      <div class="member-chips">${membersHtml}</div>
-      <div style="margin-top: 14px;">
-        <button type="button" class="btn btn-secondary btn-sm" id="leave-team-btn">${escapeHtml(t('leave_team_btn'))}</button>
-      </div>
+      <p class="muted" style="margin-top: 0;">${escapeHtml(t('lobby_ready_hint'))}</p>
+      <button type="button" class="btn btn-secondary btn-sm" id="switch-to-spectator-btn">${escapeHtml(t('leave_to_roles_btn'))}</button>
     `;
 
-    const leaveBtn = document.getElementById('leave-team-btn');
-    if (leaveBtn) {
-      leaveBtn.addEventListener('click', () => {
-        socket.emit('student:leave_team', (res) => {
-          if (!res?.ok) showToast(res?.error || t('toast_leave_err'), 'error');
-        });
+    document.getElementById('switch-to-spectator-btn')?.addEventListener('click', () => {
+      mode = null;
+      localStorage.removeItem(STORAGE_ID_KEY);
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      socket.emit('student:set_spectator', { enabled: false }, (res) => {
+        if (res?.state) render(res.state);
       });
-    }
+    });
+
+    els.lobbyPlayersCount.textContent = t('players_count', { n: state.players.length });
+    renderPlayersGrid(els.lobbyPlayersList, state.players, { showSubmissionStatus: false });
   }
 
   function renderRoundScreen(state) {
     const round = state.currentRound;
-    const team = state.myTeam;
-    if (!round || !team) return;
+    const p = state.player;
+    if (!round || !p) return;
 
     const roundKey = `${round.roundNumber}_${round.title}`;
     if (lastRoundKey !== roundKey) {
       lastRoundKey = roundKey;
-      captainDirty = false;
-      els.captainAnswerInput.value = team.submission?.text || '';
-      els.memberIdeaInput.value = '';
-    } else if (!captainDirty && team.submission?.text && !els.captainAnswerInput.value) {
-      els.captainAnswerInput.value = team.submission.text;
+      answerDirty = false;
+      els.playerAnswerInput.value = p.submission?.text || '';
+      resetAntiCheatTracking();
+    } else if (!answerDirty && p.submission?.text && !els.playerAnswerInput.value) {
+      els.playerAnswerInput.value = p.submission.text;
     }
 
     const locTitle = pickLocalized(round.title, round.titleKk);
@@ -404,7 +413,7 @@
       total: round.totalQuestions,
       title: locTitle
     });
-    els.roundTeamPill.textContent = `${team.emoji} ${team.name}`;
+    els.roundPlayerPill.textContent = `${p.emoji} ${p.name}`;
     els.roundQuestionText.textContent = locQuestion;
 
     syncTimerFromPayload({
@@ -419,13 +428,17 @@
     const isLocked = state.status === 'ROUND_LOCKED';
     const isJudging = state.status === 'JUDGING';
 
+    if (!isActive) {
+      resetAntiCheatTracking();
+    }
+
     if (isActive) {
       els.roundStatusBanner.classList.add('hidden');
     } else if (isLocked) {
       els.roundStatusBanner.className = 'alert alert-warning';
       els.roundStatusBanner.innerHTML = `${escapeHtml(t('round_locked_msg'))} ${
-        team.submission
-          ? `${escapeHtml(t('your_team_final_ans'))} <strong>${escapeHtml(team.submission.text)}</strong>`
+        p.submission
+          ? `${escapeHtml(t('your_final_ans'))} <strong>${escapeHtml(p.submission.text)}</strong>`
           : escapeHtml(t('no_answer_submitted'))
       }`;
       els.roundStatusBanner.classList.remove('hidden');
@@ -438,62 +451,16 @@
       els.roundStatusBanner.classList.remove('hidden');
     }
 
-    els.captainPanel.classList.toggle('hidden', !(isActive && team.isCaptain));
-    els.memberPanel.classList.toggle('hidden', !(isActive && !team.isCaptain));
-    els.captainNoteFormWrap.classList.toggle('hidden', !(isActive && team.isCaptain));
+    els.playerAnswerPanel.classList.toggle('hidden', !isActive);
 
-    if (team.isCaptain) {
-      if (team.submission) {
-        els.captainSubmittedBanner.innerHTML = `${escapeHtml(t('captain_submitted_banner'))} <strong>${escapeHtml(team.submission.text)}</strong> ${escapeHtml(t('can_update_before_end'))}`;
-        els.captainSubmittedBanner.classList.remove('hidden');
-        els.captainSubmitBtn.textContent = t('update_final_btn');
+    if (isActive) {
+      if (p.submission) {
+        els.playerSubmittedBanner.innerHTML = `${escapeHtml(t('player_submitted_banner'))} <strong>${escapeHtml(p.submission.text)}</strong> ${escapeHtml(t('can_update_before_end'))}`;
+        els.playerSubmittedBanner.classList.remove('hidden');
+        els.playerSubmitBtn.textContent = t('update_final_btn');
       } else {
-        els.captainSubmittedBanner.classList.add('hidden');
-        els.captainSubmitBtn.textContent = t('send_final_btn');
-      }
-    } else {
-      if (team.submission) {
-        els.memberOfficialStatus.className = 'alert alert-success';
-        els.memberOfficialStatus.innerHTML = `${escapeHtml(t('member_official_sent'))} <strong>${escapeHtml(team.submission.text)}</strong>`;
-      } else {
-        els.memberOfficialStatus.className = 'alert alert-warning';
-        els.memberOfficialStatus.textContent = t('member_official_waiting');
-      }
-    }
-
-    const ideas = team.ideas || [];
-    els.ideasCountPill.textContent = String(ideas.length);
-    if (!ideas.length) {
-      els.teamIdeasFeed.innerHTML = `<div class="muted">${escapeHtml(t('no_ideas_yet'))}</div>`;
-    } else {
-      els.teamIdeasFeed.innerHTML = [...ideas]
-        .reverse()
-        .map(
-          (idea) => `
-            <div class="idea-card">
-              <div>
-                <div class="idea-author">${escapeHtml(idea.playerName)}</div>
-                <div class="idea-text">${escapeHtml(idea.text)}</div>
-              </div>
-              ${
-                isActive && team.isCaptain
-                  ? `<button type="button" class="btn btn-sm btn-secondary use-idea-btn" data-idea-text="${escapeHtml(idea.text)}">${escapeHtml(t('use_idea_btn'))}</button>`
-                  : ''
-              }
-            </div>
-          `
-        )
-        .join('');
-
-      if (isActive && team.isCaptain) {
-        els.teamIdeasFeed.querySelectorAll('.use-idea-btn').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            els.captainAnswerInput.value = btn.dataset.ideaText;
-            captainDirty = true;
-            els.captainAnswerInput.focus();
-            showToast(t('toast_idea_inserted'));
-          });
-        });
+        els.playerSubmittedBanner.classList.add('hidden');
+        els.playerSubmitBtn.textContent = t('send_final_btn');
       }
     }
   }
@@ -504,31 +471,29 @@
     return 'score-low';
   }
 
-  function renderLeaderboard(container, leaderboard, myTeamId) {
+  function renderLeaderboard(container, leaderboard) {
     if (!leaderboard || !leaderboard.length) {
       container.innerHTML = `<div class="muted">${escapeHtml(t('leaderboard_empty'))}</div>`;
       return;
     }
 
     container.innerHTML = leaderboard
-      .map((team, idx) => {
+      .map((entry, idx) => {
         const rank = idx + 1;
         const rankClass = rank <= 3 ? `r${rank}` : '';
         const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
-        const isMine = team.id === myTeamId;
         return `
-          <div class="leader-row" style="${isMine ? 'border-color: var(--primary);' : ''}">
+          <div class="leader-row" style="${entry.isMe ? 'border-color: var(--primary);' : ''}">
             <div style="display:flex; align-items:center; gap:10px;">
               <div class="leader-rank ${rankClass}">${medal}</div>
               <div>
                 <div style="font-weight:700;">
-                  ${escapeHtml(team.emoji)} ${escapeHtml(team.name)}
-                  ${isMine ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('you_pill'))}</span>` : ''}
+                  ${escapeHtml(entry.emoji)} ${escapeHtml(entry.name)}
+                  ${entry.isMe ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('you_pill'))}</span>` : ''}
                 </div>
-                <div class="muted" style="font-size:0.8rem;">${team.memberCount} ${escapeHtml(t('members_short'))}</div>
               </div>
             </div>
-            <div style="font-weight:800; font-size:1.05rem;">${team.totalScore} ${escapeHtml(t('pts_short'))}</div>
+            <div style="font-weight:800; font-size:1.05rem;">${entry.totalScore} ${escapeHtml(t('pts_short'))}</div>
           </div>
         `;
       })
@@ -540,6 +505,24 @@
     const res = state.roundResults;
     if (!round || !res) return;
 
+    if (res.myEvaluation) {
+      const me = res.myEvaluation;
+      els.myRoundResultCard.classList.remove('hidden');
+      els.myRoundResultCard.innerHTML = `
+        <div class="card-title">
+          <span>${escapeHtml(t('my_result_heading'))}</span>
+          <span class="score-badge ${scoreClass(me.score)}">${me.score} / 100</span>
+        </div>
+        <div style="margin-bottom:6px; font-size:0.95rem;">
+          <span class="muted">${escapeHtml(t('answer_label'))}</span>
+          ${me.answer ? `<strong>${escapeHtml(me.answer)}</strong>` : `<span class="muted">${escapeHtml(t('no_answer_label'))}</span>`}
+        </div>
+        <div class="muted" style="font-size:0.92rem;">💬 ${escapeHtml(me.comment)}</div>
+      `;
+    } else {
+      els.myRoundResultCard.classList.add('hidden');
+    }
+
     const locTitle = pickLocalized(round.title, round.titleKk);
     const locRefAnswer = pickLocalized(res.referenceAnswer, res.referenceAnswerKk);
 
@@ -547,47 +530,40 @@
       num: round.roundNumber,
       title: locTitle
     });
-    const sourceLabel =
+    els.resultsJudgeBadge.textContent =
       res.judgeSource === 'qwen'
         ? t('judge_qwen', { model: res.modelUsed || 'Qwen AI' })
         : res.judgeSource === 'manual'
           ? t('judge_manual')
           : t('judge_fallback');
-    els.resultsJudgeBadge.textContent = sourceLabel;
 
     els.resultsReferenceAnswer.textContent = locRefAnswer;
     els.resultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
 
-    const myTeamId = state.myTeam?.id;
     els.resultsEvaluations.innerHTML = res.evaluations
-      .map((ev) => {
-        const isMine = ev.teamId === myTeamId;
-        return `
-          <div class="eval-card ${ev.isWinner ? 'winner' : ''}">
-            <div class="eval-head">
-              <div style="font-weight:700;">
-                ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.teamName)}
-                ${isMine ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('your_team_pill'))}</span>` : ''}
-              </div>
-              <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
+      .map((ev) => `
+        <div class="eval-card ${ev.isWinner ? 'winner' : ''}" style="${ev.isMe ? 'border-color: var(--primary);' : ''}">
+          <div class="eval-head">
+            <div style="font-weight:700;">
+              ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.playerName)}
+              ${ev.isMe ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('you_pill'))}</span>` : ''}
             </div>
-            <div style="margin-bottom:6px; font-size:0.93rem;">
-              <span class="muted">${escapeHtml(t('answer_label'))}</span>
-              ${ev.answer ? `<strong>${escapeHtml(ev.answer)}</strong>` : `<span class="muted">${escapeHtml(t('no_answer_label'))}</span>`}
-            </div>
-            <div class="muted" style="font-size:0.9rem;">
-              💬 ${escapeHtml(ev.comment)}
-            </div>
+            <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
           </div>
-        `;
-      })
+          <div style="margin-bottom:6px; font-size:0.93rem;">
+            <span class="muted">${escapeHtml(t('answer_label'))}</span>
+            ${ev.answer ? `<strong>${escapeHtml(ev.answer)}</strong>` : `<span class="muted">${escapeHtml(t('no_answer_label'))}</span>`}
+          </div>
+          <div class="muted" style="font-size:0.9rem;">💬 ${escapeHtml(ev.comment)}</div>
+        </div>
+      `)
       .join('');
 
-    renderLeaderboard(els.resultsLeaderboard, state.leaderboard, myTeamId);
+    renderLeaderboard(els.resultsLeaderboard, state.leaderboard);
   }
 
   function renderFinishedScreen(state) {
-    renderLeaderboard(els.finalLeaderboard, state.leaderboard, state.myTeam?.id);
+    renderLeaderboard(els.finalLeaderboard, state.leaderboard);
 
     const history = state.roundHistory || [];
     if (!history.length) {
@@ -616,7 +592,7 @@
 
   function renderSpectatorScreen(state) {
     const round = state.currentRound;
-    const teams = state.teams || [];
+    const players = state.players || [];
     const status = state.status;
 
     els.spectatorPhasePill.textContent = t(`phase_${status}`);
@@ -656,7 +632,7 @@
       }
 
       if (status === 'ROUND_ACTIVE') {
-        els.spectatorStatusBox.textContent = t('spectator_round_hidden_msg');
+        els.spectatorStatusBox.textContent = t('spectator_round_active_msg');
       } else if (status === 'ROUND_LOCKED') {
         els.spectatorStatusBox.textContent = t('spectator_locked_msg');
       } else {
@@ -695,7 +671,7 @@
             <div class="eval-card ${ev.isWinner ? 'winner' : ''}">
               <div class="eval-head">
                 <div style="font-weight:700;">
-                  ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.teamName)}
+                  ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.playerName)}
                 </div>
                 <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
               </div>
@@ -719,82 +695,52 @@
 
     const isRoundStatus =
       status === 'ROUND_ACTIVE' || status === 'ROUND_LOCKED' || status === 'JUDGING';
-    const submittedCount = teams.filter((tm) => tm.hasSubmitted).length;
+    const submittedCount = players.filter((p) => p.hasSubmitted).length;
 
-    els.spectatorTeamsHeading.textContent = isRoundStatus
-      ? t('spectator_team_status_title')
-      : t('all_teams_lobby');
+    els.spectatorPlayersHeading.textContent = isRoundStatus
+      ? t('spectator_players_status_title')
+      : t('all_players_lobby');
     els.spectatorAnsweredPill.textContent = isRoundStatus
-      ? t('answered_summary', { submitted: submittedCount, total: teams.length })
-      : t('teams_count', { n: teams.length });
+      ? t('answered_summary', { submitted: submittedCount, total: players.length })
+      : t('players_count', { n: players.length });
 
-    if (!teams.length) {
-      els.spectatorTeamsList.innerHTML = `<div class="muted">${escapeHtml(t('no_teams_yet'))}</div>`;
-    } else {
-      els.spectatorTeamsList.innerHTML = teams
-        .map((team) => {
-          const memberNames = team.members
-            .map(
-              (m) =>
-                `${m.isCaptain ? '👑 ' : ''}${escapeHtml(m.name)}${m.isOnline ? '' : ` ${escapeHtml(t('offline_tag'))}`}`
-            )
-            .join(', ');
-          const badge = isRoundStatus
-            ? `<span class="pill ${team.hasSubmitted ? 'pill-success' : 'pill-warning'}">${escapeHtml(team.hasSubmitted ? t('status_answered') : t('status_thinking'))}</span>`
-            : `<span class="pill">${team.memberCount} ${escapeHtml(t('members_short'))} · ${team.totalScore} ${escapeHtml(t('pts_short'))}</span>`;
-          return `
-            <div class="team-item">
-              <div class="team-item-left">
-                <div class="team-emoji">${escapeHtml(team.emoji)}</div>
-                <div>
-                  <div class="team-name">${escapeHtml(team.name)}</div>
-                  <div class="muted" style="font-size:0.82rem;">${memberNames || escapeHtml(t('nobody_yet'))}</div>
-                </div>
-              </div>
-              <div>${badge}</div>
-            </div>
-          `;
-        })
-        .join('');
-    }
-
-    renderLeaderboard(els.spectatorLeaderboard, state.leaderboard, null);
+    renderPlayersGrid(els.spectatorPlayersList, players, { showSubmissionStatus: isRoundStatus });
+    renderLeaderboard(els.spectatorLeaderboard, state.leaderboard);
   }
 
   function render(state) {
     currentState = state;
     renderTopBar(state);
 
-    if (isSpectator) {
+    if (mode === 'spectator') {
+      stopTimerLoop();
       showOnlyScreen('spectator');
       renderSpectatorScreen(state);
       return;
     }
 
-    if (!state.player) {
+    if (mode === null && !state.player) {
       stopTimerLoop();
-      showOnlyScreen('login');
+      resetAntiCheatTracking();
+      showOnlyScreen('roleSelect');
       return;
     }
 
-    if (!state.myTeam) {
+    if (!state.player) {
       stopTimerLoop();
-      showOnlyScreen('teamSelect');
+      resetAntiCheatTracking();
+      showOnlyScreen('login');
       renderEmojiPicker(state.availableEmojis);
-      els.teamsCountPill.textContent = t('teams_count', { n: state.teams.length });
-      renderTeamsList(els.availableTeamsList, state.teams, { allowJoin: true });
       return;
     }
+
+    mode = 'player';
 
     if (state.status === 'LOBBY') {
       stopTimerLoop();
+      resetAntiCheatTracking();
       showOnlyScreen('lobby');
-      renderMyTeamLobby(state);
-      els.lobbyTeamsCount.textContent = t('teams_count', { n: state.teams.length });
-      renderTeamsList(els.lobbyTeamsList, state.teams, {
-        allowJoin: false,
-        myTeamId: state.myTeam.id
-      });
+      renderLobbyScreen(state);
       return;
     }
 
@@ -810,6 +756,7 @@
 
     if (state.status === 'ROUND_RESULTS') {
       stopTimerLoop();
+      resetAntiCheatTracking();
       showOnlyScreen('results');
       renderResultsScreen(state);
       return;
@@ -817,6 +764,7 @@
 
     if (state.status === 'FINISHED') {
       stopTimerLoop();
+      resetAntiCheatTracking();
       showOnlyScreen('finished');
       renderFinishedScreen(state);
     }
@@ -835,12 +783,23 @@
   // Event Handlers
   // ========================
 
-  els.enterSpectatorBtn.addEventListener('click', () => {
-    isSpectator = true;
+  els.choosePlayBtn.addEventListener('click', () => {
+    mode = 'player';
+    sessionStorage.removeItem(SPECTATOR_KEY);
+    if (currentState) render(currentState);
+  });
+
+  els.chooseSpectatorBtn.addEventListener('click', () => {
+    mode = 'spectator';
     sessionStorage.setItem(SPECTATOR_KEY, '1');
     socket.emit('student:set_spectator', { enabled: true }, (res) => {
       if (res?.state) render(res.state);
     });
+  });
+
+  els.backToRoleBtn.addEventListener('click', () => {
+    mode = null;
+    if (currentState) render(currentState);
   });
 
   els.loginForm.addEventListener('submit', (e) => {
@@ -852,44 +811,31 @@
     const existingToken = localStorage.getItem(STORAGE_TOKEN_KEY) || undefined;
     socket.emit(
       'student:register',
-      { playerId: existingId, playerToken: existingToken, name },
+      { playerId: existingId, playerToken: existingToken, name, emoji: selectedEmoji },
       (res) => {
         if (!res?.ok) {
           showToast(res?.error || t('toast_login_err'), 'error');
           return;
         }
+        mode = 'player';
         localStorage.setItem(STORAGE_ID_KEY, res.playerId);
         if (res.playerToken) {
           localStorage.setItem(STORAGE_TOKEN_KEY, res.playerToken);
         }
         localStorage.setItem(STORAGE_NAME_KEY, name);
+        localStorage.setItem(STORAGE_EMOJI_KEY, selectedEmoji);
         if (res.state) render(res.state);
       }
     );
   });
 
-  els.createTeamForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = els.newTeamName.value.trim();
-    if (!name) return;
-
-    socket.emit('student:create_team', { name, emoji: selectedEmoji }, (res) => {
-      if (!res?.ok) {
-        showToast(res?.error || t('toast_create_team_err'), 'error');
-        return;
-      }
-      els.newTeamName.value = '';
-      showToast(t('toast_team_created'), 'success');
-    });
+  els.playerAnswerInput.addEventListener('input', () => {
+    answerDirty = true;
   });
 
-  els.captainAnswerInput.addEventListener('input', () => {
-    captainDirty = true;
-  });
-
-  els.captainAnswerForm.addEventListener('submit', (e) => {
+  els.playerAnswerForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const text = els.captainAnswerInput.value.trim();
+    const text = els.playerAnswerInput.value.trim();
     if (!text) {
       showToast(t('toast_enter_answer'), 'error');
       return;
@@ -899,37 +845,8 @@
         showToast(res?.error || t('toast_send_err'), 'error');
         return;
       }
-      captainDirty = false;
+      answerDirty = false;
       showToast(t('toast_answer_sent'), 'success');
-    });
-  });
-
-  els.memberIdeaForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const text = els.memberIdeaInput.value.trim();
-    if (!text) return;
-
-    socket.emit('student:submit_idea', { text }, (res) => {
-      if (!res?.ok) {
-        showToast(res?.error || t('toast_idea_err'), 'error');
-        return;
-      }
-      els.memberIdeaInput.value = '';
-      showToast(t('toast_idea_sent'), 'success');
-    });
-  });
-
-  els.captainIdeaForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const text = els.captainIdeaInput.value.trim();
-    if (!text) return;
-
-    socket.emit('student:submit_idea', { text }, (res) => {
-      if (!res?.ok) {
-        showToast(res?.error || t('toast_idea_err'), 'error');
-        return;
-      }
-      els.captainIdeaInput.value = '';
     });
   });
 
@@ -940,7 +857,7 @@
   socket.on('connect', () => {
     isConnected = true;
     updateConnectionLabel();
-    if (isSpectator) {
+    if (mode === 'spectator') {
       socket.emit('student:set_spectator', { enabled: true }, (res) => {
         if (res?.state) render(res.state);
       });
@@ -949,11 +866,12 @@
     const savedId = localStorage.getItem(STORAGE_ID_KEY);
     const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY);
     const savedName = localStorage.getItem(STORAGE_NAME_KEY);
+    const savedEmoji = localStorage.getItem(STORAGE_EMOJI_KEY) || selectedEmoji;
     if (savedId && savedToken && savedName) {
       els.playerNameInput.value = savedName;
       socket.emit(
         'student:register',
-        { playerId: savedId, playerToken: savedToken, name: savedName },
+        { playerId: savedId, playerToken: savedToken, name: savedName, emoji: savedEmoji },
         (res) => {
           if (res?.ok && res.state) {
             localStorage.setItem(STORAGE_ID_KEY, res.playerId);
@@ -991,6 +909,8 @@
   socket.on('student:kicked', () => {
     localStorage.removeItem(STORAGE_ID_KEY);
     localStorage.removeItem(STORAGE_TOKEN_KEY);
+    mode = null;
+    resetAntiCheatTracking();
     showToast(t('toast_kicked'), 'error');
   });
 })();

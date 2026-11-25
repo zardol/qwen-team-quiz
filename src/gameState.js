@@ -14,7 +14,7 @@ const GAME_STATUS = {
   FINISHED: 'FINISHED'
 };
 
-const TEAM_EMOJIS = ['🚀', '🦉', '⚡', '🦊', '🔥', '🧠', '🌟', '🐉', '🎯', '🦁', '🛸', '💎'];
+const PLAYER_EMOJIS = ['🚀', '🦉', '⚡', '🦊', '🔥', '🧠', '🌟', '🐉', '🎯', '🦁', '🛸', '💎'];
 
 function generateId(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`;
@@ -36,22 +36,21 @@ function tokensMatch(a, b) {
 class QuizGameManager {
   constructor() {
     this.status = GAME_STATUS.LOBBY;
-    this.players = new Map(); // playerId -> { id, token, name, teamId, isOnline, socketIds: Set, joinedAt }
-    this.teams = new Map();   // teamId -> { id, name, emoji, captainId, roundScores: {}, totalScore, createdAt }
+    this.players = new Map(); // playerId -> { id, token, name, emoji, isOnline, socketIds: Set, roundScores: {}, totalScore, totalTabLeaves, joinedAt }
     this.questions = [];
     this.settings = {
       quizTitle: 'Интерактивный квиз по философии',
       quizTitleKk: 'Философия бойынша интерактивті квиз',
       qwenBaseUrl: process.env.QWEN_BASE_URL || DEFAULT_QWEN_BASE_URL,
       qwenModel: process.env.QWEN_MODEL || DEFAULT_QWEN_MODEL,
-      defaultTimeLimit: 90
+      defaultTimeLimit: 60
     };
     this.runtimeApiKey = (process.env.QWEN_API_KEY || '').trim();
 
     this.currentRoundIndex = -1;
     this.roundRecords = new Map(); // roundIndex -> roundRecord
     this.timerInterval = null;
-    this.onStateChanged = null; // callback () => void
+    this.onStateChanged = null;
 
     this.loadFromDisk();
   }
@@ -77,7 +76,7 @@ class QuizGameManager {
             quizTitleKk: parsed.settings.quizTitleKk || this.settings.quizTitleKk,
             qwenBaseUrl: process.env.QWEN_BASE_URL || parsed.settings.qwenBaseUrl || DEFAULT_QWEN_BASE_URL,
             qwenModel: process.env.QWEN_MODEL || parsed.settings.qwenModel || DEFAULT_QWEN_MODEL,
-            defaultTimeLimit: Number(parsed.settings.defaultTimeLimit) || 90
+            defaultTimeLimit: Number(parsed.settings.defaultTimeLimit) || 60
           };
         }
         if (Array.isArray(parsed.questions)) {
@@ -115,7 +114,7 @@ class QuizGameManager {
       referenceAnswer: String(q.referenceAnswer || '').trim(),
       referenceAnswerKk: String(q.referenceAnswerKk || '').trim(),
       criteria: String(q.criteria || '').trim(),
-      timeLimit: Math.max(15, Math.min(600, Number(q.timeLimit) || this.settings.defaultTimeLimit || 90))
+      timeLimit: Math.max(15, Math.min(600, Number(q.timeLimit) || this.settings.defaultTimeLimit || 60))
     };
   }
 
@@ -147,7 +146,6 @@ class QuizGameManager {
     const updated = this.normalizeQuestion({ ...this.questions[idx], ...data, id: questionId }, idx);
     this.questions[idx] = updated;
 
-    // Also update active round snapshot if editing the currently selected round before judging
     const activeRecord = this.roundRecords.get(idx);
     if (activeRecord && !activeRecord.publishedResults) {
       activeRecord.title = updated.title;
@@ -236,20 +234,20 @@ class QuizGameManager {
   }
 
   // ========================
-  // Players & Teams
+  // Players
   // ========================
 
-  registerOrReconnectPlayer({ playerId, playerToken, name, socketId }) {
+  registerOrReconnectPlayer({ playerId, playerToken, name, emoji, socketId }) {
     const cleanName = String(name || '').trim().slice(0, 32);
     const existing = playerId ? this.players.get(playerId) : null;
 
     if (existing && tokensMatch(playerToken, existing.token)) {
       if (cleanName) existing.name = cleanName;
+      if (emoji && PLAYER_EMOJIS.includes(emoji)) {
+        existing.emoji = emoji;
+      }
       existing.isOnline = true;
       existing.socketIds.add(socketId);
-      if (existing.teamId && !this.teams.has(existing.teamId)) {
-        existing.teamId = null;
-      }
       this.notifyChanged();
       return existing;
     }
@@ -258,14 +256,21 @@ class QuizGameManager {
       throw new Error('Введите ваше имя.');
     }
 
+    const chosenEmoji = PLAYER_EMOJIS.includes(emoji)
+      ? emoji
+      : PLAYER_EMOJIS[this.players.size % PLAYER_EMOJIS.length];
+
     const newId = generateId('p');
     const player = {
       id: newId,
       token: crypto.randomBytes(16).toString('hex'),
       name: cleanName,
-      teamId: null,
+      emoji: chosenEmoji,
       isOnline: true,
       socketIds: new Set([socketId]),
+      roundScores: {},
+      totalScore: 0,
+      totalTabLeaves: 0,
       joinedAt: Date.now()
     };
     this.players.set(newId, player);
@@ -299,146 +304,28 @@ class QuizGameManager {
     return player;
   }
 
-  createTeam(playerId, { name, emoji }) {
-    const player = this.players.get(playerId);
-    if (!player) throw new Error('Сначала войдите, указав своё имя.');
-
-    const cleanName = String(name || '').trim().slice(0, 36);
-    if (cleanName.length < 2) {
-      throw new Error('Название команды должно содержать минимум 2 символа.');
-    }
-
-    for (const t of this.teams.values()) {
-      if (t.name.toLowerCase() === cleanName.toLowerCase()) {
-        throw new Error('Команда с таким названием уже существует.');
-      }
-    }
-
-    if (player.teamId) {
-      this._detachPlayerFromTeam(player);
-    }
-
-    const chosenEmoji = TEAM_EMOJIS.includes(emoji)
-      ? emoji
-      : TEAM_EMOJIS[this.teams.size % TEAM_EMOJIS.length];
-
-    const team = {
-      id: generateId('team'),
-      name: cleanName,
-      emoji: chosenEmoji,
-      captainId: player.id,
-      roundScores: {},
-      totalScore: 0,
-      createdAt: Date.now()
-    };
-
-    this.teams.set(team.id, team);
-    player.teamId = team.id;
-    this.notifyChanged();
-    return team;
-  }
-
-  joinTeam(playerId, teamId) {
-    const player = this.players.get(playerId);
-    if (!player) throw new Error('Сначала войдите, указав своё имя.');
-
-    const team = this.teams.get(teamId);
-    if (!team) throw new Error('Команда не найдена.');
-
-    if (player.teamId === teamId) {
-      return team;
-    }
-
-    if (player.teamId) {
-      this._detachPlayerFromTeam(player);
-    }
-
-    player.teamId = team.id;
-    if (!team.captainId || !this.players.has(team.captainId)) {
-      team.captainId = player.id;
-    }
-
-    this.notifyChanged();
-    return team;
-  }
-
-  leaveTeam(playerId) {
-    const player = this.players.get(playerId);
-    if (!player) throw new Error('Игрок не найден.');
-    if (!player.teamId) return;
-
-    this._detachPlayerFromTeam(player);
-    this.notifyChanged();
-  }
-
-  _detachPlayerFromTeam(player) {
-    const oldTeamId = player.teamId;
-    player.teamId = null;
-    if (!oldTeamId) return;
-
-    const team = this.teams.get(oldTeamId);
-    if (!team) return;
-
-    const remaining = this.getTeamMembers(oldTeamId);
-    if (remaining.length === 0) {
-      if (this.status === GAME_STATUS.LOBBY && team.totalScore === 0) {
-        this.teams.delete(oldTeamId);
-      } else {
-        team.captainId = null;
-      }
-      return;
-    }
-
-    if (team.captainId === player.id) {
-      const onlineFirst = remaining.find((m) => m.isOnline) || remaining[0];
-      team.captainId = onlineFirst.id;
-    }
-  }
-
-  setTeamCaptain(teamId, newCaptainId) {
-    const team = this.teams.get(teamId);
-    if (!team) throw new Error('Команда не найдена.');
-    const member = this.players.get(newCaptainId);
-    if (!member || member.teamId !== teamId) {
-      throw new Error('Выбранный игрок не состоит в этой команде.');
-    }
-    team.captainId = newCaptainId;
-    this.notifyChanged();
-    return team;
-  }
-
-  deleteTeam(teamId) {
-    const team = this.teams.get(teamId);
-    if (!team) throw new Error('Команда не найдена.');
-    for (const player of this.players.values()) {
-      if (player.teamId === teamId) {
-        player.teamId = null;
-      }
-    }
-    this.teams.delete(teamId);
-    const currentRound = this.getCurrentRound();
-    if (currentRound) {
-      currentRound.submissions.delete(teamId);
-      currentRound.ideas.delete(teamId);
-    }
-    this.notifyChanged();
-  }
-
   kickPlayer(playerId) {
     const player = this.players.get(playerId);
     if (!player) throw new Error('Участник не найден.');
-    if (player.teamId) {
-      this._detachPlayerFromTeam(player);
-    }
     this.players.delete(playerId);
+    const currentRound = this.getCurrentRound();
+    if (currentRound) {
+      currentRound.submissions.delete(playerId);
+      currentRound.tabLeaves.delete(playerId);
+    }
     this.notifyChanged();
   }
 
-  kickUnassignedPlayers() {
+  kickOfflinePlayers() {
     const removedIds = [];
+    const currentRound = this.getCurrentRound();
     for (const [id, player] of this.players.entries()) {
-      if (!player.teamId) {
+      if (!player.isOnline) {
         this.players.delete(id);
+        if (currentRound) {
+          currentRound.submissions.delete(id);
+          currentRound.tabLeaves.delete(id);
+        }
         removedIds.push(id);
       }
     }
@@ -448,27 +335,16 @@ class QuizGameManager {
     return removedIds;
   }
 
-  getTeamMembers(teamId) {
-    const members = [];
-    for (const player of this.players.values()) {
-      if (player.teamId === teamId) {
-        members.push(player);
-      }
-    }
-    members.sort((a, b) => a.joinedAt - b.joinedAt);
-    return members;
-  }
-
-  recalculateTeamTotal(team) {
+  recalculatePlayerTotal(player) {
     let sum = 0;
-    for (const val of Object.values(team.roundScores)) {
+    for (const val of Object.values(player.roundScores)) {
       sum += Number(val) || 0;
     }
-    team.totalScore = sum;
+    player.totalScore = sum;
   }
 
   // ========================
-  // Round & Answer Mechanics
+  // Round, Answers & Anti-Cheat
   // ========================
 
   getCurrentRound() {
@@ -485,7 +361,7 @@ class QuizGameManager {
     this.stopTimer();
     const q = this.questions[idx];
     const now = Date.now();
-    const duration = q.timeLimit || this.settings.defaultTimeLimit || 90;
+    const duration = q.timeLimit || this.settings.defaultTimeLimit || 60;
 
     const existing = this.roundRecords.get(idx);
     const record = {
@@ -506,21 +382,20 @@ class QuizGameManager {
       isPaused: false,
       remainingOnPause: duration,
       submissions: existing ? existing.submissions : new Map(),
-      ideas: existing ? existing.ideas : new Map(),
+      tabLeaves: existing ? existing.tabLeaves : new Map(),
       draftResults: null,
       publishedResults: null
     };
 
-    // Clear previous round scores if restarting this same round
-    for (const team of this.teams.values()) {
-      if (Object.prototype.hasOwnProperty.call(team.roundScores, idx)) {
-        delete team.roundScores[idx];
-        this.recalculateTeamTotal(team);
+    for (const player of this.players.values()) {
+      if (Object.prototype.hasOwnProperty.call(player.roundScores, idx)) {
+        delete player.roundScores[idx];
+        this.recalculatePlayerTotal(player);
       }
     }
     if (existing) {
       record.submissions.clear();
-      record.ideas.clear();
+      record.tabLeaves.clear();
     }
 
     this.roundRecords.set(idx, record);
@@ -602,6 +477,14 @@ class QuizGameManager {
     if (round) {
       round.isPaused = false;
       round.remainingOnPause = 0;
+      const now = Date.now();
+      for (const entry of round.tabLeaves.values()) {
+        if (entry.isCurrentlyAway && entry.lastLeftAt) {
+          entry.totalAwayMs += Math.max(0, now - entry.lastLeftAt);
+          entry.isCurrentlyAway = false;
+          entry.lastLeftAt = null;
+        }
+      }
     }
     this.status = GAME_STATUS.ROUND_LOCKED;
     this.notifyChanged();
@@ -621,52 +504,10 @@ class QuizGameManager {
     this.notifyChanged();
   }
 
-  submitIdea(playerId, text) {
+  submitPlayerAnswer(playerId, text) {
     const player = this.players.get(playerId);
-    if (!player || !player.teamId) {
-      throw new Error('Вы не состоите в команде.');
-    }
-    if (this.status !== GAME_STATUS.ROUND_ACTIVE) {
-      throw new Error('Приём предложений доступен только во время активного раунда.');
-    }
-    const round = this.getCurrentRound();
-    if (!round) throw new Error('Активный раунд не найден.');
-
-    const cleanText = String(text || '').trim().slice(0, 400);
-    if (!cleanText) {
-      throw new Error('Введите текст идеи перед отправкой.');
-    }
-
-    if (!round.ideas.has(player.teamId)) {
-      round.ideas.set(player.teamId, []);
-    }
-    const list = round.ideas.get(player.teamId);
-    const idea = {
-      id: generateId('idea'),
-      playerId: player.id,
-      playerName: player.name,
-      text: cleanText,
-      timestamp: Date.now()
-    };
-    list.push(idea);
-    if (list.length > 50) {
-      list.shift();
-    }
-
-    this.notifyChanged();
-    return idea;
-  }
-
-  submitTeamAnswer(playerId, text) {
-    const player = this.players.get(playerId);
-    if (!player || !player.teamId) {
-      throw new Error('Вы не состоите в команде.');
-    }
-    const team = this.teams.get(player.teamId);
-    if (!team) throw new Error('Команда не найдена.');
-
-    if (team.captainId !== player.id) {
-      throw new Error('Отправлять итоговый ответ команды может только капитан.');
+    if (!player) {
+      throw new Error('Сначала войдите в игру, указав ваше имя.');
     }
     if (this.status !== GAME_STATUS.ROUND_ACTIVE) {
       throw new Error('Время приёма ответов уже завершено.');
@@ -677,38 +518,85 @@ class QuizGameManager {
 
     const cleanText = String(text || '').trim().slice(0, 800);
     if (!cleanText) {
-      throw new Error('Ответ команды не может быть пустым.');
+      throw new Error('Ответ не может быть пустым.');
     }
 
     const submission = {
       text: cleanText,
-      updatedAt: Date.now(),
-      submittedBy: player.name
+      updatedAt: Date.now()
     };
-    round.submissions.set(team.id, submission);
+    round.submissions.set(player.id, submission);
 
     this.notifyChanged();
     return submission;
+  }
+
+  recordTabLeave(playerId) {
+    if (this.status !== GAME_STATUS.ROUND_ACTIVE) return false;
+    const player = this.players.get(playerId);
+    const round = this.getCurrentRound();
+    if (!player || !round) return false;
+
+    const entry = round.tabLeaves.get(playerId) || {
+      count: 0,
+      totalAwayMs: 0,
+      isCurrentlyAway: false,
+      lastLeftAt: null
+    };
+
+    if (entry.isCurrentlyAway) {
+      return false;
+    }
+
+    entry.count += 1;
+    entry.isCurrentlyAway = true;
+    entry.lastLeftAt = Date.now();
+    round.tabLeaves.set(playerId, entry);
+    player.totalTabLeaves += 1;
+    return true;
+  }
+
+  recordTabReturn(playerId, awayMs) {
+    if (this.status !== GAME_STATUS.ROUND_ACTIVE) return false;
+    const round = this.getCurrentRound();
+    if (!round) return false;
+
+    const entry = round.tabLeaves.get(playerId);
+    if (!entry || !entry.isCurrentlyAway) return false;
+
+    const parsedAway = Number(awayMs);
+    const elapsed =
+      Number.isFinite(parsedAway) && parsedAway > 0
+        ? Math.min(parsedAway, 600000)
+        : entry.lastLeftAt
+          ? Math.max(0, Date.now() - entry.lastLeftAt)
+          : 0;
+
+    entry.totalAwayMs += elapsed;
+    entry.isCurrentlyAway = false;
+    entry.lastLeftAt = null;
+    round.tabLeaves.set(playerId, entry);
+    return true;
   }
 
   // ========================
   // Judging & Results
   // ========================
 
-  getTeamAnswersForJudging() {
+  getPlayerAnswersForJudging() {
     const round = this.getCurrentRound();
     if (!round) throw new Error('Нет выбранного раунда.');
 
-    const teamAnswers = [];
-    for (const team of this.teams.values()) {
-      const sub = round.submissions.get(team.id);
-      teamAnswers.push({
-        teamId: team.id,
-        teamName: team.name,
+    const playerAnswers = [];
+    for (const player of this.players.values()) {
+      const sub = round.submissions.get(player.id);
+      playerAnswers.push({
+        playerId: player.id,
+        playerName: player.name,
         answer: sub ? sub.text : ''
       });
     }
-    return teamAnswers;
+    return playerAnswers;
   }
 
   setJudgingStatus(isJudging) {
@@ -734,23 +622,23 @@ class QuizGameManager {
     const round = this.getCurrentRound();
     if (!round) throw new Error('Раунд не найден.');
 
-    const evaluations = Array.from(this.teams.values()).map((team) => {
-      const sub = round.submissions.get(team.id);
+    const evaluations = Array.from(this.players.values()).map((player) => {
+      const sub = round.submissions.get(player.id);
       const ans = sub ? sub.text : '';
       return {
-        teamId: team.id,
-        teamName: team.name,
+        playerId: player.id,
+        playerName: player.name,
         answer: ans,
         score: 0,
         comment: ans
           ? 'Оценка выставлена ведущим вручную.'
-          : 'Команда не отправила ответ в этом раунде.'
+          : 'Участник не отправил ответ в этом раунде.'
       };
     });
 
     round.draftResults = {
       evaluations,
-      bestTeamIds: [],
+      bestPlayerIds: [],
       roundSummary: 'Оценка раунда выставлена ведущим вручную.',
       judgeSource: 'manual',
       modelUsed: 'manual'
@@ -760,7 +648,7 @@ class QuizGameManager {
     return round.draftResults;
   }
 
-  updateEvaluationScore({ teamId, score, comment }) {
+  updateEvaluationScore({ playerId, score, comment }) {
     const round = this.getCurrentRound();
     if (!round) throw new Error('Раунд не найден.');
 
@@ -772,8 +660,8 @@ class QuizGameManager {
       throw new Error('Сначала запустите оценку раунда.');
     }
 
-    const entry = target.evaluations.find((e) => e.teamId === teamId);
-    if (!entry) throw new Error('Команда в результатах не найдена.');
+    const entry = target.evaluations.find((e) => e.playerId === playerId);
+    if (!entry) throw new Error('Участник в результатах не найден.');
 
     const clamped = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
     entry.score = clamped;
@@ -784,16 +672,16 @@ class QuizGameManager {
     const withAnswers = target.evaluations.filter((e) => e.score > 0 && e.answer);
     if (withAnswers.length > 0) {
       const maxScore = Math.max(...withAnswers.map((e) => e.score));
-      target.bestTeamIds = withAnswers.filter((e) => e.score === maxScore).map((e) => e.teamId);
+      target.bestPlayerIds = withAnswers.filter((e) => e.score === maxScore).map((e) => e.playerId);
     } else {
-      target.bestTeamIds = [];
+      target.bestPlayerIds = [];
     }
 
     if (this.status === GAME_STATUS.ROUND_RESULTS) {
-      const team = this.teams.get(teamId);
-      if (team) {
-        team.roundScores[round.roundIndex] = clamped;
-        this.recalculateTeamTotal(team);
+      const player = this.players.get(playerId);
+      if (player) {
+        player.roundScores[round.roundIndex] = clamped;
+        this.recalculatePlayerTotal(player);
       }
     }
 
@@ -810,10 +698,10 @@ class QuizGameManager {
 
     const results = JSON.parse(JSON.stringify(round.draftResults));
     for (const ev of results.evaluations) {
-      const team = this.teams.get(ev.teamId);
-      if (team) {
-        team.roundScores[round.roundIndex] = Number(ev.score) || 0;
-        this.recalculateTeamTotal(team);
+      const player = this.players.get(ev.playerId);
+      if (player) {
+        player.roundScores[round.roundIndex] = Number(ev.score) || 0;
+        this.recalculatePlayerTotal(player);
       }
     }
 
@@ -829,22 +717,20 @@ class QuizGameManager {
     this.notifyChanged();
   }
 
-  resetQuiz({ keepTeams = false } = {}) {
+  resetQuiz({ keepPlayers = false } = {}) {
     this.stopTimer();
     this.status = GAME_STATUS.LOBBY;
     this.currentRoundIndex = -1;
     this.roundRecords.clear();
 
-    if (keepTeams) {
-      for (const team of this.teams.values()) {
-        team.roundScores = {};
-        team.totalScore = 0;
+    if (keepPlayers) {
+      for (const player of this.players.values()) {
+        player.roundScores = {};
+        player.totalScore = 0;
+        player.totalTabLeaves = 0;
       }
     } else {
-      this.teams.clear();
-      for (const player of this.players.values()) {
-        player.teamId = null;
-      }
+      this.players.clear();
     }
 
     this.notifyChanged();
@@ -855,43 +741,45 @@ class QuizGameManager {
   // ========================
 
   getLeaderboard() {
-    const list = Array.from(this.teams.values()).map((team) => ({
-      id: team.id,
-      name: team.name,
-      emoji: team.emoji,
-      totalScore: team.totalScore,
-      memberCount: this.getTeamMembers(team.id).length
+    const list = Array.from(this.players.values()).map((player) => ({
+      id: player.id,
+      name: player.name,
+      emoji: player.emoji,
+      totalScore: player.totalScore,
+      isOnline: player.isOnline
     }));
     list.sort((a, b) => b.totalScore - a.totalScore || a.name.localeCompare(b.name, 'ru'));
     return list;
   }
 
-  serializePublicTeams(currentRound) {
-    return Array.from(this.teams.values())
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((team) => {
-        const members = this.getTeamMembers(team.id).map((m) => ({
-          name: m.name,
-          isOnline: m.isOnline,
-          isCaptain: m.id === team.captainId
-        }));
-        const hasSubmitted = currentRound ? currentRound.submissions.has(team.id) : false;
-        return {
-          id: team.id,
-          name: team.name,
-          emoji: team.emoji,
-          totalScore: team.totalScore,
-          memberCount: members.length,
-          members,
-          hasSubmitted
-        };
-      });
+  serializePublicPlayers(currentRound) {
+    return Array.from(this.players.values())
+      .sort((a, b) => a.joinedAt - b.joinedAt)
+      .map((player) => ({
+        name: player.name,
+        emoji: player.emoji,
+        isOnline: player.isOnline,
+        totalScore: player.totalScore,
+        hasSubmitted: currentRound ? currentRound.submissions.has(player.id) : false
+      }));
+  }
+
+  _serializeTabLeaveEntry(entry) {
+    if (!entry) {
+      return { count: 0, totalAwaySec: 0, isCurrentlyAway: false };
+    }
+    const extraMs =
+      entry.isCurrentlyAway && entry.lastLeftAt ? Math.max(0, Date.now() - entry.lastLeftAt) : 0;
+    return {
+      count: entry.count,
+      totalAwaySec: Math.round((entry.totalAwayMs + extraMs) / 1000),
+      isCurrentlyAway: entry.isCurrentlyAway
+    };
   }
 
   buildStudentStateForPlayer(playerId) {
     const player = playerId ? this.players.get(playerId) : null;
     const round = this.getCurrentRound();
-    const myTeam = player?.teamId ? this.teams.get(player.teamId) : null;
 
     let publicRound = null;
     if (round) {
@@ -914,48 +802,46 @@ class QuizGameManager {
       };
     }
 
-    let myTeamData = null;
-    if (myTeam) {
-      const members = this.getTeamMembers(myTeam.id).map((m) => ({
-        name: m.name,
-        isOnline: m.isOnline,
-        isCaptain: m.id === myTeam.captainId
-      }));
-      const submission = round ? round.submissions.get(myTeam.id) || null : null;
-      const ideas = round ? round.ideas.get(myTeam.id) || [] : [];
-      myTeamData = {
-        id: myTeam.id,
-        name: myTeam.name,
-        emoji: myTeam.emoji,
-        isCaptain: myTeam.captainId === player.id,
-        totalScore: myTeam.totalScore,
-        members,
-        submission,
-        ideas: ideas.map((i) => ({
-          id: i.id,
-          playerName: i.playerName,
-          text: i.text,
-          timestamp: i.timestamp
-        }))
+    let playerData = null;
+    if (player) {
+      const submission = round ? round.submissions.get(player.id) || null : null;
+      playerData = {
+        id: player.id,
+        name: player.name,
+        emoji: player.emoji,
+        totalScore: player.totalScore,
+        submission
       };
     }
 
     let roundResults = null;
     if (this.status === GAME_STATUS.ROUND_RESULTS && round?.publishedResults) {
-      const teamLookup = new Map(
-        Array.from(this.teams.values()).map((t) => [t.id, t])
+      const playerLookup = new Map(
+        Array.from(this.players.values()).map((p) => [p.id, p])
       );
+      const bestIds = round.publishedResults.bestPlayerIds || [];
+      const evaluations = [...round.publishedResults.evaluations]
+        .map((ev) => ({
+          playerName: ev.playerName,
+          answer: ev.answer,
+          score: ev.score,
+          comment: ev.comment,
+          emoji: playerLookup.get(ev.playerId)?.emoji || '🧠',
+          isWinner: bestIds.includes(ev.playerId),
+          isMe: Boolean(playerId && ev.playerId === playerId)
+        }))
+        .sort((a, b) => b.score - a.score || (a.isMe ? -1 : b.isMe ? 1 : 0));
+
+      const myEvaluation = evaluations.find((ev) => ev.isMe) || null;
+
       roundResults = {
-        ...round.publishedResults,
+        judgeSource: round.publishedResults.judgeSource,
+        modelUsed: round.publishedResults.modelUsed,
+        roundSummary: round.publishedResults.roundSummary,
         referenceAnswer: round.referenceAnswer,
         referenceAnswerKk: round.referenceAnswerKk || '',
-        evaluations: [...round.publishedResults.evaluations]
-          .map((ev) => ({
-            ...ev,
-            emoji: teamLookup.get(ev.teamId)?.emoji || '🏳️',
-            isWinner: round.publishedResults.bestTeamIds.includes(ev.teamId)
-          }))
-          .sort((a, b) => b.score - a.score)
+        myEvaluation,
+        evaluations
       };
     }
 
@@ -971,73 +857,64 @@ class QuizGameManager {
             questionKk: rec.questionKk || '',
             referenceAnswer: rec.referenceAnswer,
             referenceAnswerKk: rec.referenceAnswerKk || '',
-            roundSummary: rec.publishedResults.roundSummary,
-            bestTeamIds: rec.publishedResults.bestTeamIds
+            roundSummary: rec.publishedResults.roundSummary
           });
         }
       }
       roundHistory.sort((a, b) => a.roundNumber - b.roundNumber);
     }
 
+    const publicLeaderboard = this.getLeaderboard().map((entry) => ({
+      name: entry.name,
+      emoji: entry.emoji,
+      totalScore: entry.totalScore,
+      isOnline: entry.isOnline,
+      isMe: Boolean(playerId && entry.id === playerId)
+    }));
+
     return {
       status: this.status,
       quizTitle: this.settings.quizTitle,
       quizTitleKk: this.settings.quizTitleKk || '',
       totalQuestions: this.questions.length,
-      player: player
-        ? {
-            id: player.id,
-            name: player.name,
-            teamId: player.teamId
-          }
-        : null,
-      myTeam: myTeamData,
-      teams: this.serializePublicTeams(round),
+      player: playerData,
+      players: this.serializePublicPlayers(round),
       currentRound: publicRound,
       roundResults,
-      leaderboard: this.getLeaderboard(),
+      leaderboard: publicLeaderboard,
       roundHistory,
-      availableEmojis: TEAM_EMOJIS
+      availableEmojis: PLAYER_EMOJIS
     };
   }
 
   buildAdminState() {
     const round = this.getCurrentRound();
 
-    const adminTeams = Array.from(this.teams.values())
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((team) => {
-        const members = this.getTeamMembers(team.id).map((m) => ({
-          id: m.id,
-          name: m.name,
-          isOnline: m.isOnline,
-          isCaptain: m.id === team.captainId
-        }));
-        const submission = round ? round.submissions.get(team.id) || null : null;
-        const ideas = round ? round.ideas.get(team.id) || [] : [];
+    const adminPlayers = Array.from(this.players.values())
+      .sort((a, b) => a.joinedAt - b.joinedAt)
+      .map((player) => {
+        const submission = round ? round.submissions.get(player.id) || null : null;
+        const leaveRaw = round ? round.tabLeaves.get(player.id) : null;
         return {
-          id: team.id,
-          name: team.name,
-          emoji: team.emoji,
-          captainId: team.captainId,
-          totalScore: team.totalScore,
-          roundScores: team.roundScores,
-          members,
+          id: player.id,
+          name: player.name,
+          emoji: player.emoji,
+          isOnline: player.isOnline,
+          totalScore: player.totalScore,
+          roundScores: player.roundScores,
           submission,
-          ideasCount: ideas.length
+          totalTabLeaves: player.totalTabLeaves,
+          tabLeaveInfo: this._serializeTabLeaveEntry(leaveRaw)
         };
       });
 
-    const unassignedPlayers = Array.from(this.players.values())
-      .filter((p) => !p.teamId)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        isOnline: p.isOnline
-      }));
-
     let currentRoundData = null;
     if (round) {
+      const tabLeaveMap = {};
+      for (const [pId, entry] of round.tabLeaves.entries()) {
+        tabLeaveMap[pId] = this._serializeTabLeaveEntry(entry);
+      }
+
       currentRoundData = {
         roundIndex: round.roundIndex,
         roundNumber: round.roundNumber,
@@ -1052,7 +929,8 @@ class QuizGameManager {
         remainingMs: this.getRemainingMs(round),
         isPaused: round.isPaused,
         submittedCount: round.submissions.size,
-        totalTeams: this.teams.size,
+        totalPlayers: this.players.size,
+        tabLeaveMap,
         draftResults: round.draftResults,
         publishedResults: round.publishedResults
       };
@@ -1063,8 +941,7 @@ class QuizGameManager {
       currentRoundIndex: this.currentRoundIndex,
       settings: this.getAdminSettings(),
       questions: this.questions,
-      teams: adminTeams,
-      unassignedPlayers,
+      players: adminPlayers,
       onlinePlayersCount: Array.from(this.players.values()).filter((p) => p.isOnline).length,
       totalPlayersCount: this.players.size,
       currentRound: currentRoundData,
@@ -1076,5 +953,5 @@ class QuizGameManager {
 module.exports = {
   QuizGameManager,
   GAME_STATUS,
-  TEAM_EMOJIS
+  PLAYER_EMOJIS
 };

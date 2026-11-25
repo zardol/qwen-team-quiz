@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Командный квиз — Участник</title>
+  <title>Интерактивный квиз — Участник</title>
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
@@ -25,10 +25,31 @@
       </div>
     </header>
 
-    <!-- 1. Вход студента -->
+    <!-- 1. Выбор роли -->
+    <section id="screen-role-select" class="card hidden">
+      <h2 class="card-title" data-i18n="choose_role_title">Выберите режим входа</h2>
+      <p class="muted" data-i18n="choose_role_subtitle">Участвуйте в квизе лично или откройте экран наблюдателя для трансляции результатов.</p>
+      <div class="role-grid">
+        <button type="button" class="role-card role-card-primary" id="choose-play-btn">
+          <span class="role-icon">🎮</span>
+          <span class="role-title" data-i18n="role_play_title">Играть</span>
+          <span class="role-desc" data-i18n="role_play_desc">Укажите имя, выберите аватар и отвечайте на вопросы самостоятельно.</span>
+        </button>
+        <button type="button" class="role-card" id="choose-spectator-btn">
+          <span class="role-icon">👀</span>
+          <span class="role-title" data-i18n="role_spectator_title">Наблюдатель</span>
+          <span class="role-desc" data-i18n="role_spectator_desc">Просмотр вопроса, таймера, статусов участников и турнирной таблицы без участия.</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 2. Вход игрока (имя + аватар) -->
     <section id="screen-login" class="card hidden">
-      <h2 class="card-title" data-i18n="login_welcome">Добро пожаловать в квиз!</h2>
-      <p class="muted" data-i18n="login_subtitle">Введите ваше имя, чтобы создать команду или присоединиться к существующей.</p>
+      <div class="card-title">
+        <span data-i18n="login_welcome">Вход в игру</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="back-to-role-btn" data-i18n="back_btn">← Назад</button>
+      </div>
+      <p class="muted" data-i18n="login_subtitle">Введите ваше имя и выберите аватар.</p>
       <form id="login-form">
         <div class="form-group">
           <label for="player-name-input" data-i18n="your_name_label">Ваше имя</label>
@@ -42,61 +63,25 @@
             autocomplete="name"
           />
         </div>
-        <button type="submit" class="btn btn-block" data-i18n="enter_quiz_btn">Войти в квиз</button>
+        <div class="form-group">
+          <label data-i18n="choose_avatar_label">Выберите аватар</label>
+          <div class="emoji-picker" id="emoji-picker"></div>
+        </div>
+        <button type="submit" class="btn btn-block" data-i18n="enter_quiz_btn">Войти в игру</button>
       </form>
-      <div class="divider-or" data-i18n="or_divider">или</div>
-      <button type="button" class="btn btn-secondary btn-block" id="enter-spectator-btn" data-i18n="enter_spectator_btn">
-        👀 Войти как наблюдатель
-      </button>
     </section>
 
-    <!-- 2. Выбор или создание команды -->
-    <section id="screen-team-select" class="hidden">
-      <div class="card card-highlight">
-        <h2 class="card-title">
-          <span data-i18n="create_team_heading">Создать новую команду</span>
-          <span class="pill pill-primary" data-i18n="become_captain_badge">Вы станете капитаном 👑</span>
-        </h2>
-        <form id="create-team-form">
-          <div class="form-group">
-            <label for="new-team-name" data-i18n="team_name_label">Название команды</label>
-            <input
-              type="text"
-              id="new-team-name"
-              data-i18n-placeholder="team_name_placeholder"
-              placeholder="Введите название команды"
-              maxlength="36"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label data-i18n="choose_emblem_label">Выберите эмблему команды</label>
-            <div class="emoji-picker" id="emoji-picker"></div>
-          </div>
-          <button type="submit" class="btn btn-block" data-i18n="create_team_btn">Создать команду и стать капитаном</button>
-        </form>
-      </div>
-
-      <div class="card">
-        <h2 class="card-title">
-          <span data-i18n="join_existing_heading">Или вступить в существующую команду</span>
-          <span class="pill" id="teams-count-pill">0</span>
-        </h2>
-        <div id="available-teams-list" class="team-list"></div>
-      </div>
-    </section>
-
-    <!-- 3. Лобби команды -->
+    <!-- 3. Лобби участника -->
     <section id="screen-lobby" class="hidden">
-      <div class="card card-highlight" id="my-team-lobby-card"></div>
+      <div class="card card-highlight" id="my-lobby-card"></div>
 
       <div class="card">
         <h2 class="card-title">
-          <span data-i18n="all_teams_lobby">Все команды в лобби</span>
-          <span class="pill" id="lobby-teams-count">0</span>
+          <span data-i18n="all_players_lobby">Участники в лобби</span>
+          <span class="pill" id="lobby-players-count">0</span>
         </h2>
         <p class="muted" data-i18n="waiting_host_start">Ожидаем, пока ведущий запустит первый раунд.</p>
-        <div id="lobby-teams-list" class="team-list"></div>
+        <div id="lobby-players-list" class="player-grid"></div>
       </div>
     </section>
 
@@ -105,7 +90,7 @@
       <div class="card card-highlight">
         <div class="card-title">
           <span id="round-heading">Раунд 1</span>
-          <span class="pill pill-primary" id="round-team-pill"></span>
+          <span class="pill pill-primary" id="round-player-pill"></span>
         </div>
 
         <div class="timer-wrap" id="round-timer-wrap">
@@ -123,71 +108,33 @@
         <!-- Статус закрытия / судейства -->
         <div id="round-status-banner" class="alert alert-warning hidden"></div>
 
-        <!-- Панель Капитана -->
-        <div id="captain-panel" class="hidden">
-          <div class="alert alert-success hidden" id="captain-submitted-banner"></div>
-          <form id="captain-answer-form">
+        <!-- Поле личного ответа игрока -->
+        <div id="player-answer-panel" class="hidden">
+          <div class="alert alert-success hidden" id="player-submitted-banner"></div>
+          <form id="player-answer-form">
             <div class="form-group">
-              <label for="captain-answer-input" data-i18n="captain_answer_label">👑 Итоговый ответ команды</label>
+              <label for="player-answer-input" data-i18n="player_answer_label">✍️ Ваш ответ</label>
               <textarea
-                id="captain-answer-input"
-                data-i18n-placeholder="captain_answer_placeholder"
-                placeholder="Введите итоговый ответ команды или подставьте идею от участника ниже..."
+                id="player-answer-input"
+                data-i18n-placeholder="player_answer_placeholder"
+                placeholder="Напишите ваш ответ здесь..."
                 maxlength="800"
                 rows="3"
               ></textarea>
             </div>
-            <button type="submit" class="btn btn-success btn-block" id="captain-submit-btn" data-i18n="send_final_btn">
-              Отправить итоговый ответ команды
+            <button type="submit" class="btn btn-success btn-block" id="player-submit-btn" data-i18n="send_final_btn">
+              Отправить ответ
             </button>
           </form>
         </div>
-
-        <!-- Панель обычного участника -->
-        <div id="member-panel" class="hidden">
-          <div class="alert alert-warning" id="member-official-status"></div>
-          <form id="member-idea-form">
-            <div class="form-group">
-              <label for="member-idea-input" data-i18n="suggest_idea_label">💡 Предложить вариант ответа капитану</label>
-              <textarea
-                id="member-idea-input"
-                data-i18n-placeholder="suggest_idea_placeholder"
-                placeholder="Напишите вашу идею или аргумент для капитана..."
-                maxlength="400"
-                rows="2"
-              ></textarea>
-            </div>
-            <button type="submit" class="btn btn-block" data-i18n="send_idea_btn">Отправить идею в команду</button>
-          </form>
-        </div>
-      </div>
-
-      <!-- Лента идей команды -->
-      <div class="card">
-        <h3 class="card-title">
-          <span data-i18n="ideas_heading">Командное обсуждение</span>
-          <span class="pill" id="ideas-count-pill">0</span>
-        </h3>
-        <div id="captain-note-form-wrap" class="hidden" style="margin-bottom: 10px;">
-          <form id="captain-idea-form" class="btn-row" style="align-items: stretch;">
-            <input
-              type="text"
-              id="captain-idea-input"
-              data-i18n-placeholder="captain_note_placeholder"
-              placeholder="Написать заметку команде..."
-              maxlength="400"
-              style="flex: 1;"
-            />
-            <button type="submit" class="btn btn-secondary btn-sm" data-i18n="send_short_btn">Отправить</button>
-          </form>
-        </div>
-        <div id="team-ideas-feed" class="ideas-feed"></div>
       </div>
     </section>
 
     <!-- 5. Результаты раунда -->
     <section id="screen-results" class="hidden">
-      <div class="card card-highlight">
+      <div id="my-round-result-card" class="card card-highlight hidden"></div>
+
+      <div class="card">
         <div class="card-title">
           <span id="results-round-title">Итоги раунда</span>
           <span class="pill pill-success" id="results-judge-badge">⚖️ Судья: Qwen</span>
@@ -202,7 +149,7 @@
 
         <div class="summary-box" id="results-summary"></div>
 
-        <h3 style="margin: 14px 0 10px; font-size: 1rem;" data-i18n="team_scores_heading">Оценки команд в этом раунде</h3>
+        <h3 style="margin: 14px 0 10px; font-size: 1rem;" data-i18n="player_scores_heading">Оценки участников в раунде</h3>
         <div id="results-evaluations"></div>
       </div>
 
@@ -230,7 +177,7 @@
       <div class="card card-highlight" id="spectator-top-card">
         <div class="card-title">
           <span id="spectator-phase-title">Ожидание начала квиза</span>
-          <span class="pill pill-primary" id="spectator-phase-pill">Лобби</span>
+          <span class="pill pill-primary" id="spectator-phase-pill">Ожидание старта</span>
         </div>
 
         <div class="timer-wrap hidden" id="spectator-timer-wrap">
@@ -265,10 +212,10 @@
       <div class="spectator-grid">
         <div class="card">
           <div class="card-title">
-            <span id="spectator-teams-heading" data-i18n="spectator_team_status_title">Статус команд в раунде</span>
+            <span id="spectator-players-heading" data-i18n="spectator_players_status_title">Участники в раунде</span>
             <span class="pill pill-success" id="spectator-answered-pill">0</span>
           </div>
-          <div id="spectator-teams-list" class="team-list"></div>
+          <div id="spectator-players-list" class="player-grid"></div>
         </div>
 
         <div class="card">
