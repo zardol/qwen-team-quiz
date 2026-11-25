@@ -632,10 +632,13 @@
 
     if (res.myEvaluation) {
       const me = res.myEvaluation;
+      const myAutoLoss = me.disqualified
+        ? `<span class="cheat-badge away-now" style="margin-right:6px;">🚫 ${escapeHtml(t('auto_loss_badge'))}</span>`
+        : '';
       els.myRoundResultCard.classList.remove('hidden');
       els.myRoundResultCard.innerHTML = `
         <div class="card-title">
-          <span>${escapeHtml(t('my_result_heading'))}</span>
+          <span>${escapeHtml(t('my_result_heading'))} ${myAutoLoss}</span>
           <span class="score-badge ${scoreClass(me.score)}">${me.score} / 100</span>
         </div>
         <div style="margin-bottom:6px; font-size:0.95rem;">
@@ -660,17 +663,24 @@
         ? t('judge_qwen', { model: res.modelUsed || 'Qwen AI' })
         : res.judgeSource === 'manual'
           ? t('judge_manual')
-          : t('judge_fallback');
+          : res.judgeSource === 'system'
+            ? t('judge_system')
+            : t('judge_fallback');
 
     els.resultsReferenceAnswer.textContent = locRefAnswer;
     els.resultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
 
     els.resultsEvaluations.innerHTML = res.evaluations
-      .map((ev) => `
+      .map((ev) => {
+        const autoLossBadge = ev.disqualified
+          ? `<span class="cheat-badge away-now" style="margin-left:6px;">🚫 ${escapeHtml(t('auto_loss_badge'))}</span>`
+          : '';
+        return `
         <div class="eval-card ${ev.isWinner ? 'winner' : ''}" style="${ev.isMe ? 'border-color: var(--primary);' : ''}">
           <div class="eval-head">
             <div style="font-weight:700;">
               ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.playerName)}
+              ${autoLossBadge}
               ${ev.isMe ? `<span class="pill pill-primary" style="margin-left:6px;">${escapeHtml(t('you_pill'))}</span>` : ''}
             </div>
             <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
@@ -681,7 +691,8 @@
           </div>
           <div class="muted" style="font-size:0.9rem;">💬 ${escapeHtml(ev.comment)}</div>
         </div>
-      `)
+      `;
+      })
       .join('');
 
     renderLeaderboard(els.resultsLeaderboard, state.leaderboard);
@@ -784,7 +795,9 @@
           ? t('judge_qwen', { model: res.modelUsed || 'Qwen AI' })
           : res.judgeSource === 'manual'
             ? t('judge_manual')
-            : t('judge_fallback');
+            : res.judgeSource === 'system'
+              ? t('judge_system')
+              : t('judge_fallback');
       els.spectatorReferenceAnswer.textContent = pickLocalized(
         res.referenceAnswer,
         res.referenceAnswerKk
@@ -792,11 +805,16 @@
       els.spectatorResultsSummary.innerHTML = `<strong>${escapeHtml(t('judge_verdict_label'))}</strong> ${escapeHtml(res.roundSummary)}`;
       els.spectatorResultsEvaluations.innerHTML = res.evaluations
         .map(
-          (ev) => `
+          (ev) => {
+            const autoLossBadge = ev.disqualified
+              ? `<span class="cheat-badge away-now" style="margin-left:6px;">🚫 ${escapeHtml(t('auto_loss_badge'))}</span>`
+              : '';
+            return `
             <div class="eval-card ${ev.isWinner ? 'winner' : ''}">
               <div class="eval-head">
                 <div style="font-weight:700;">
                   ${ev.isWinner ? '👑 ' : ''}${escapeHtml(ev.emoji)} ${escapeHtml(ev.playerName)}
+                  ${autoLossBadge}
                 </div>
                 <span class="score-badge ${scoreClass(ev.score)}">${ev.score} / 100</span>
               </div>
@@ -806,7 +824,8 @@
               </div>
               <div class="muted" style="font-size:0.9rem;">💬 ${escapeHtml(ev.comment)}</div>
             </div>
-          `
+          `;
+          }
         )
         .join('');
     } else if (status === 'FINISHED') {

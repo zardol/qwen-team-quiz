@@ -99,8 +99,14 @@ function computeTokenAndBigramSimilarity(a, b) {
   return Math.min(1, tokenJaccard * 0.6 + bigramDice * 0.4);
 }
 
+function formatDisqualifiedComment(tabLeaveCount, tabAwaySec) {
+  const leaves = Math.max(1, Number(tabLeaveCount) || 1);
+  const secPart = Number(tabAwaySec) > 0 ? `, ${Math.round(tabAwaySec)} сек` : '';
+  return `Автопроигрыш раунда: зафиксирован выход из вкладки (${leaves} раз${secPart}). Ответ не отправлялся в ИИ.`;
+}
+
 function pickBestPlayerIds(evaluations) {
-  const withScore = evaluations.filter((e) => e.score > 0 && e.answer);
+  const withScore = evaluations.filter((e) => e.score > 0 && e.answer && !e.disqualified);
   if (withScore.length === 0) return [];
   const maxScore = Math.max(...withScore.map((e) => e.score));
   return withScore.filter((e) => e.score === maxScore).map((e) => e.playerId);
@@ -116,9 +122,22 @@ function fallbackJudgeAnswers({ referenceAnswer, referenceAnswerKk, playerAnswer
   const refLower = ref.toLowerCase();
   const refKkLower = refKk.toLowerCase();
   const refNums = extractNumbers(ref);
+  let disqualifiedCount = 0;
 
   const evaluations = playerAnswers.map((item) => {
     const ans = String(item.answer || '').trim();
+    if (item.disqualified) {
+      disqualifiedCount += 1;
+      return {
+        playerId: item.playerId,
+        playerName: item.playerName,
+        answer: ans,
+        score: 0,
+        disqualified: true,
+        comment: formatDisqualifiedComment(item.tabLeaveCount, item.tabAwaySec)
+      };
+    }
+
     if (!ans) {
       return {
         playerId: item.playerId,
@@ -182,9 +201,17 @@ function fallbackJudgeAnswers({ referenceAnswer, referenceAnswerKk, playerAnswer
   });
 
   const best = pickBestPlayerIds(evaluations);
-  const summary = best.length > 0
-    ? `Выполнена резервная алгоритмическая оценка (причина: ${reason || 'ИИ API недоступен'}). Проверьте баллы перед публикацией.`
-    : 'В этом раунде ни один участник не дал ответа.';
+  let summary;
+  if (best.length > 0) {
+    summary = `Выполнена резервная алгоритмическая оценка (причина: ${reason || 'ИИ API недоступен'}). Проверьте баллы перед публикацией.`;
+    if (disqualifiedCount > 0) {
+      summary += ` Дисквалифицировано за выход из вкладки: ${disqualifiedCount}.`;
+    }
+  } else if (disqualifiedCount > 0) {
+    summary = `Нет допущенных победителей: ${disqualifiedCount} участник(ов) получили автопроигрыш (0 б.) за выход из вкладки.`;
+  } else {
+    summary = 'В этом раунде ни один участник не дал ответа.';
+  }
 
   return {
     evaluations,
@@ -320,10 +347,23 @@ async function judgeRoundAnswers({
   const model = (config.model || process.env.QWEN_MODEL || DEFAULT_QWEN_MODEL).trim();
 
   const emptyPlayers = [];
+  const disqualifiedPlayers = [];
   const submittedPlayers = [];
 
   for (const item of playerAnswers) {
     const cleanAnswer = String(item.answer || '').trim();
+    if (item.disqualified) {
+      disqualifiedPlayers.push({
+        playerId: item.playerId,
+        playerName: item.playerName,
+        answer: cleanAnswer,
+        score: 0,
+        disqualified: true,
+        comment: formatDisqualifiedComment(item.tabLeaveCount, item.tabAwaySec)
+      });
+      continue;
+    }
+
     if (!cleanAnswer) {
       emptyPlayers.push({
         playerId: item.playerId,
@@ -342,10 +382,18 @@ async function judgeRoundAnswers({
   }
 
   if (submittedPlayers.length === 0) {
+    let roundSummary = 'В этом раунде ни один участник не отправил ответ.';
+    if (disqualifiedPlayers.length > 0 && emptyPlayers.length === 0) {
+      roundSummary =
+        'Все участники вышли из вкладки во время раунда — автопроигрыш раунда, ответы не отправлялись в ИИ.';
+    } else if (disqualifiedPlayers.length > 0) {
+      roundSummary = `Нет допущенных ответов для проверки ИИ (дисквалифицировано за выход из вкладки: ${disqualifiedPlayers.length}).`;
+    }
+
     return {
-      evaluations: emptyPlayers,
+      evaluations: [...emptyPlayers, ...disqualifiedPlayers],
       bestPlayerIds: [],
-      roundSummary: 'В этом раунде ни один участник не отправил ответ.',
+      roundSummary,
       judgeSource: 'system',
       modelUsed: model
     };
@@ -386,7 +434,7 @@ async function judgeRoundAnswers({
   );
 
   const judgedSubmitted = batchResults.flatMap((r) => r.evaluations);
-  const allEvaluations = [...judgedSubmitted, ...emptyPlayers];
+  const allEvaluations = [...judgedSubmitted, ...emptyPlayers, ...disqualifiedPlayers];
   const bestPlayerIds = pickBestPlayerIds(allEvaluations);
 
   let roundSummary = singleBatch ? batchResults[0]?.roundSummary : '';
@@ -400,6 +448,9 @@ async function judgeRoundAnswers({
     roundSummary = topNames.length > 0
       ? `ИИ-судья Qwen оценил ${submittedPlayers.length} ответов. Лучший результат (${maxScore} б.): ${topNames.join(', ')}.`
       : 'ИИ-судья Qwen оценил все ответы участников.';
+  }
+  if (disqualifiedPlayers.length > 0) {
+    roundSummary += ` Дисквалифицировано за выход из вкладки: ${disqualifiedPlayers.length}.`;
   }
 
   return {

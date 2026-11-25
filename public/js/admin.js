@@ -271,7 +271,9 @@
         ? `Модель: ${escapeHtml(evalData.modelUsed || 'Qwen')}`
         : evalData.judgeSource === 'manual'
           ? 'Ручная оценка ведущего'
-          : 'Резервная автооценка';
+          : evalData.judgeSource === 'system'
+            ? 'Автопроверка системы'
+            : 'Резервная автооценка';
 
     els.evalSummary.innerHTML = `
       ${warnHtml}
@@ -288,6 +290,9 @@
         const emoji = playerEmojiMap.get(ev.playerId) || '🧠';
         const leaveInfo = tabLeaveMap[ev.playerId];
         const cheatBadge = renderCheatBadge(leaveInfo);
+        const autoLossBadge = ev.disqualified
+          ? '<span class="cheat-badge away-now">🚫 Автопроигрыш</span>'
+          : '';
 
         return `
           <div class="eval-card ${isBest ? 'winner' : ''}">
@@ -295,6 +300,7 @@
               <div>
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                   <strong>${isBest ? '👑 ' : ''}${escapeHtml(emoji)} ${escapeHtml(ev.playerName)}</strong>
+                  ${autoLossBadge}
                   ${cheatBadge}
                 </div>
                 <div class="muted" style="font-size:0.86rem; margin-top:4px;">

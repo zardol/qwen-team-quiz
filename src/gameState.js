@@ -640,7 +640,48 @@ class QuizGameManager {
     entry.lastLeftAt = null;
     round.tabLeaves.set(playerId, entry);
     player.totalTabLeaves = (player.totalTabLeaves || 0) + 1;
+
+    if (this.status === GAME_STATUS.ROUND_LOCKED && round.draftResults) {
+      this._applyDisqualificationToDraft(round, playerId);
+    }
+
     return true;
+  }
+
+  _formatDisqualifiedComment(count, awaySec, notSentToAi = true) {
+    const leaves = Math.max(1, Number(count) || 1);
+    const secPart = Number(awaySec) > 0 ? `, ${Math.round(awaySec)} сек` : '';
+    const suffix = notSentToAi ? ' Ответ не отправлялся в ИИ.' : '';
+    return `Автопроигрыш раунда: зафиксирован выход из вкладки (${leaves} раз${secPart}).${suffix}`;
+  }
+
+  _applyDisqualificationToDraft(round, playerId) {
+    if (!round?.draftResults?.evaluations) return;
+    const leaveInfo = this._serializeTabLeaveEntry(round.tabLeaves.get(playerId));
+    if (leaveInfo.count <= 0) return;
+
+    const entry = round.draftResults.evaluations.find((e) => e.playerId === playerId);
+    if (entry) {
+      entry.score = 0;
+      entry.disqualified = true;
+      entry.comment = this._formatDisqualifiedComment(
+        leaveInfo.count,
+        leaveInfo.totalAwaySec,
+        false
+      );
+    }
+
+    const withAnswers = round.draftResults.evaluations.filter(
+      (e) => e.score > 0 && e.answer && !e.disqualified
+    );
+    if (withAnswers.length > 0) {
+      const maxScore = Math.max(...withAnswers.map((e) => e.score));
+      round.draftResults.bestPlayerIds = withAnswers
+        .filter((e) => e.score === maxScore)
+        .map((e) => e.playerId);
+    } else {
+      round.draftResults.bestPlayerIds = [];
+    }
   }
 
   // ========================
@@ -654,10 +695,14 @@ class QuizGameManager {
     const playerAnswers = [];
     for (const player of this.players.values()) {
       const sub = round.submissions.get(player.id);
+      const leaveInfo = this._serializeTabLeaveEntry(round.tabLeaves.get(player.id));
       playerAnswers.push({
         playerId: player.id,
         playerName: player.name,
-        answer: sub ? sub.text : ''
+        answer: sub ? sub.text : '',
+        disqualified: leaveInfo.count > 0,
+        tabLeaveCount: leaveInfo.count,
+        tabAwaySec: leaveInfo.totalAwaySec
       });
     }
     return playerAnswers;
@@ -689,6 +734,17 @@ class QuizGameManager {
     const evaluations = Array.from(this.players.values()).map((player) => {
       const sub = round.submissions.get(player.id);
       const ans = sub ? sub.text : '';
+      const leaveInfo = this._serializeTabLeaveEntry(round.tabLeaves.get(player.id));
+      if (leaveInfo.count > 0) {
+        return {
+          playerId: player.id,
+          playerName: player.name,
+          answer: ans,
+          score: 0,
+          disqualified: true,
+          comment: this._formatDisqualifiedComment(leaveInfo.count, leaveInfo.totalAwaySec, false)
+        };
+      }
       return {
         playerId: player.id,
         playerName: player.name,
@@ -729,11 +785,16 @@ class QuizGameManager {
 
     const clamped = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
     entry.score = clamped;
+    if (clamped > 0) {
+      entry.disqualified = false;
+    }
     if (typeof comment === 'string') {
       entry.comment = comment.trim();
     }
 
-    const withAnswers = target.evaluations.filter((e) => e.score > 0 && e.answer);
+    const withAnswers = target.evaluations.filter(
+      (e) => e.score > 0 && e.answer && !e.disqualified
+    );
     if (withAnswers.length > 0) {
       const maxScore = Math.max(...withAnswers.map((e) => e.score));
       target.bestPlayerIds = withAnswers.filter((e) => e.score === maxScore).map((e) => e.playerId);
@@ -890,6 +951,7 @@ class QuizGameManager {
           answer: ev.answer,
           score: ev.score,
           comment: ev.comment,
+          disqualified: Boolean(ev.disqualified),
           emoji: playerLookup.get(ev.playerId)?.emoji || '🧠',
           isWinner: bestIds.includes(ev.playerId),
           isMe: Boolean(playerId && ev.playerId === playerId)
